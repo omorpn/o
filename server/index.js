@@ -1,12 +1,15 @@
 import http from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, now, seed, getSettings, setSettings, hashPassword, checkPassword } from './db.js';
-import { matchRule, parseRule, HUMAN_PHRASE } from './bot.js';
+import { matchRule, parseRule, matchKb, aiAnswer, HUMAN_PHRASE } from './bot.js';
 
 seed();
+const UPLOAD_DIR = path.join(path.dirname(process.env.DB_FILE && process.env.DB_FILE !== ':memory:' ? process.env.DB_FILE : path.join(process.cwd(), 'data', 'x')), 'uploads');
+await mkdir(UPLOAD_DIR, { recursive: true });
+const UPLOAD_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'application/pdf': 'pdf', 'text/plain': 'txt' };
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
@@ -20,9 +23,9 @@ const send = (res, code, obj) => {
 class HttpError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
 const fail = (code, msg) => { throw new HttpError(code, msg); };
 
-async function readBody(req) {
+async function readBody(req, max = 200_000) {
   let size = 0; const chunks = [];
-  for await (const c of req) { size += c.length; if (size > 200_000) fail(413, 'Payload too large'); chunks.push(c); }
+  for await (const c of req) { size += c.length; if (size > max) fail(413, 'Payload too large'); chunks.push(c); }
   if (!chunks.length) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { fail(400, 'Invalid JSON'); }
 }
@@ -57,6 +60,22 @@ setInterval(() => {
 const agentsOnline = () => new Set([...agentStreams].map(s => s.agentId)).size;
 const isOnline = vid => (visitorStreams.get(vid)?.size || 0) > 0;
 
+// ---------- webhooks & business hours ----------
+function webhook(event, data) {
+  const url = getSettings().webhookUrl; if (!/^https?:\/\//.test(url)) return;
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, time: now(), data }), signal: AbortSignal.timeout(8000) }).catch(() => {});
+}
+function withinHours() {
+  const s = getSettings(); if (!s.businessHoursEnabled) return true;
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: s.timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map(p => [p.type, p.value]));
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday);
+    const cur = `${parts.hour}:${parts.minute}`;
+    return s.hoursDays.split(',').map(Number).includes(day) && cur >= s.hoursStart && cur < s.hoursEnd;
+  } catch { return true; }
+}
+const teamAvailable = () => agentsOnline() > 0 && withinHours();
+
 // ---------- domain ----------
 const visitorOut = v => v && ({ id: v.id, name: v.name, email: v.email, page: v.page, ua: v.ua, visits: v.visits, created: v.created, last_seen: v.last_seen, online: isOnline(v.id) });
 function convOut(c) {
@@ -65,13 +84,13 @@ function convOut(c) {
   return { id: c.id, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
     needs_human: !!c.needs_human, unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
 }
-const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], created: m.created });
+const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, created: m.created });
 const getConv = id => db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
 
-function addMessage(conv, sender, body, { senderId = null, senderName = null, buttons = null } = {}) {
+function addMessage(conv, sender, body, { senderId = null, senderName = null, buttons = null, attachment = null } = {}) {
   const t = now();
-  const info = db.prepare('INSERT INTO messages(conv_id,sender,sender_id,sender_name,body,buttons,created) VALUES(?,?,?,?,?,?,?)')
-    .run(conv.id, sender, senderId, senderName, body, buttons?.length ? JSON.stringify(buttons) : null, t);
+  const info = db.prepare('INSERT INTO messages(conv_id,sender,sender_id,sender_name,body,buttons,attachment,created) VALUES(?,?,?,?,?,?,?,?)')
+    .run(conv.id, sender, senderId, senderName, body, buttons?.length ? JSON.stringify(buttons) : null, attachment ? JSON.stringify(attachment) : null, t);
   if (sender !== 'note') {
     db.prepare('UPDATE conversations SET last_body=?, updated=?, unread=unread+? WHERE id=?').run(body.slice(0, 140), t, sender === 'visitor' ? 1 : 0, conv.id);
   }
@@ -89,11 +108,12 @@ function openConversation(vid) {
   const id = db.prepare('INSERT INTO conversations(visitor_id,status,bot_active,created,updated) VALUES(?,?,?,?,?)').run(vid, 'open', s.botEnabled ? 1 : 0, t, t).lastInsertRowid;
   c = getConv(id);
   toAgents('conversation', convOut(c));
+  webhook('conversation.created', convOut(c));
   return c;
 }
 
 function handoff(conv) {
-  const s = getSettings(); const online = agentsOnline() > 0;
+  const s = getSettings(); const online = teamAvailable();
   db.prepare('UPDATE conversations SET bot_active=0, needs_human=1 WHERE id=?').run(conv.id);
   const fresh = getConv(conv.id);
   addMessage(fresh, 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
@@ -107,13 +127,25 @@ function botRespond(convId, text) {
   const s = getSettings();
   const reply = (body, buttons) => addMessage(getConv(convId), 'bot', body, { senderName: 'Bot', buttons });
   toVisitor(conv.visitor_id, 'typing', { who: 'bot' });
-  setTimeout(() => {
-    const cur = getConv(convId);
-    if (!cur || !cur.bot_active) return;
-    if (text.toLowerCase() === HUMAN_PHRASE) return handoff(cur);
-    const rule = matchRule(text);
-    if (rule) { reply(rule.reply, rule.buttons); if (rule.handoff) handoff(getConv(convId)); }
-    else reply(s.fallbackMessage, ['Talk to a human']);
+  setTimeout(async () => {
+    try {
+      const cur = getConv(convId);
+      if (!cur || !cur.bot_active) return;
+      if (text.toLowerCase() === HUMAN_PHRASE) return handoff(cur);
+      const rule = matchRule(text);
+      if (rule) { reply(rule.reply, rule.buttons); if (rule.handoff) handoff(getConv(convId)); return; }
+      const kb = matchKb(text);
+      if (kb) return reply(kb.answer);
+      if (s.aiEnabled) {
+        const hist = db.prepare("SELECT sender, body FROM messages WHERE conv_id=? AND sender IN ('visitor','bot','agent') ORDER BY id DESC LIMIT 10").all(convId).reverse()
+          .map(m => ({ role: m.sender === 'visitor' ? 'user' : 'assistant', body: m.body }));
+        const msgs = []; for (const m of hist) { if (msgs.length && msgs.at(-1).role === m.role) msgs.at(-1).content += '\n' + m.body; else msgs.push({ role: m.role, content: m.body }); }
+        while (msgs.length && msgs[0].role !== 'user') msgs.shift();
+        const ans = await aiAnswer(msgs, s.aiInstructions);
+        if (ans && getConv(convId)?.bot_active) return reply(ans);
+      }
+      if (getConv(convId)?.bot_active) reply(s.fallbackMessage, ['Talk to a human']);
+    } catch (e) { console.error('bot error', e); }
   }, 700);
 }
 
@@ -124,6 +156,16 @@ function upsertVisitor(vid, page, req) {
   else db.prepare('UPDATE visitors SET last_seen=?, page=COALESCE(NULLIF(?,\'\'),page), ua=?, visits=visits+? WHERE id=?')
     .run(t, page, ua, t - ex.last_seen > 30 * 60_000 ? 1 : 0, vid);
   return db.prepare('SELECT * FROM visitors WHERE id=?').get(vid);
+}
+
+async function saveUpload(b) {
+  const type = str(b.type, 100), ext = UPLOAD_TYPES[type];
+  if (!ext) fail(400, 'Unsupported file type (images, PDF and text only)');
+  const buf = Buffer.from(String(b.data || ''), 'base64');
+  if (!buf.length) fail(400, 'Empty file'); if (buf.length > 3_000_000) fail(413, 'File too large (max 3 MB)');
+  const id = randomBytes(12).toString('hex') + '.' + ext;
+  await writeFile(path.join(UPLOAD_DIR, id), buf);
+  return { url: '/uploads/' + id, name: str(b.name, 100).replace(/[^\w.\- ]/g, '_') || 'file.' + ext, type };
 }
 
 // ---------- widget API (public) ----------
@@ -144,7 +186,7 @@ function widgetCtx(key, vid) {
   if (key !== getSettings().siteKey) fail(403, 'Invalid site key');
   if (!VID.test(vid || '')) fail(400, 'Invalid visitor id');
 }
-const publicSettings = s => ({ title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting,
+const publicSettings = s => ({ ratingEnabled: s.ratingEnabled, title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting,
   askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
 
 async function widgetRoute(req, res, url) {
@@ -160,7 +202,7 @@ async function widgetRoute(req, res, url) {
     visitorStreams.get(vid).add(res);
     clearTimeout(offlineTimers.get(vid));
     toAgents('presence', { visitor_id: vid, online: true, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(vid)) });
-    res.write(frame('ready', { agentsOnline: agentsOnline() > 0 }));
+    res.write(frame('ready', { agentsOnline: teamAvailable() }));
     req.on('close', () => {
       const set = visitorStreams.get(vid); set?.delete(res);
       if (set && !set.size) {
@@ -171,7 +213,7 @@ async function widgetRoute(req, res, url) {
     return;
   }
   if (req.method !== 'POST') fail(404, 'Not found');
-  const b = await readBody(req);
+  const b = await readBody(req, route === 'upload' ? 4_500_000 : 200_000);
   widgetCtx(b.key, b.vid);
   limit('w:' + ipOf(req), 120, 60_000);
 
@@ -181,7 +223,7 @@ async function widgetRoute(req, res, url) {
     const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(b.vid);
     const messages = conv ? db.prepare('SELECT * FROM messages WHERE conv_id=? AND sender!=\'note\' ORDER BY id').all(conv.id).map(msgOut) : [];
     toAgents('presence', { visitor_id: v.id, online: true, visitor: visitorOut(v) });
-    return send(res, 200, { settings: publicSettings(s), visitor: { name: v.name, email: v.email }, messages, agentsOnline: agentsOnline() > 0 });
+    return send(res, 200, { settings: publicSettings(s), visitor: { name: v.name, email: v.email }, messages, agentsOnline: teamAvailable() });
   }
   if (route === 'ping') {
     const v = upsertVisitor(b.vid, str(b.page, 500), req);
@@ -193,11 +235,26 @@ async function widgetRoute(req, res, url) {
     const body = str(b.body, 2000); if (!body) fail(400, 'Empty message');
     upsertVisitor(b.vid, str(b.page, 500), req);
     const conv = openConversation(b.vid);
-    const fresh = db.prepare('SELECT COUNT(*) n FROM messages WHERE conv_id=?').get(conv.id).n === 0;
     const m = addMessage(conv, 'visitor', body);
-    if (fresh && getSettings().botEnabled === false) { /* no greeting persisted when bot is off */ }
+    webhook('message.created', { conversation_id: conv.id, sender: 'visitor', body, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid)) });
     botRespond(conv.id, body);
     return send(res, 200, { message: m });
+  }
+  if (route === 'upload') {
+    limit('wu:' + b.vid, 10, 60_000);
+    const att = await saveUpload(b); const conv = openConversation(b.vid);
+    const m = addMessage(conv, 'visitor', `📎 ${att.name}`, { attachment: att });
+    return send(res, 200, { message: m });
+  }
+  if (route === 'rate') {
+    const rating = Math.round(Number(b.rating));
+    if (!(rating >= 1 && rating <= 5)) fail(400, 'Rating must be 1-5');
+    const c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='closed' AND rating IS NULL ORDER BY id DESC LIMIT 1").get(b.vid);
+    if (!c) fail(404, 'Nothing to rate');
+    db.prepare('UPDATE conversations SET rating=?, rating_comment=? WHERE id=?').run(rating, str(b.comment, 500), c.id);
+    addMessage(getConv(c.id), 'system', `Visitor rated this conversation ${rating}/5${b.comment ? ': ' + str(b.comment, 500) : ''}`);
+    webhook('conversation.rated', { conversation_id: c.id, rating });
+    return send(res, 200, { ok: true });
   }
   if (route === 'typing') { toAgents('typing', { visitor_id: b.vid, conv_id: null }); return send(res, 200, { ok: true }); }
   if (route === 'identify') {
@@ -208,6 +265,7 @@ async function widgetRoute(req, res, url) {
     const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid);
     const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(b.vid);
     if (conv && email) addMessage(conv, 'system', `Visitor shared their email: ${email}`);
+    if (email) webhook('visitor.identified', visitorOut(v));
     toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(v) });
     return send(res, 200, { ok: true });
   }
@@ -245,7 +303,7 @@ async function apiRoute(req, res, url) {
   const admin = () => { if (me.role !== 'admin') fail(403, 'Admins only'); };
   const bodyId = v => { const n = Number(v); if (!Number.isInteger(n)) fail(400, 'Bad id'); return n; };
 
-  if (p === '/api/me') return send(res, 200, { agent: agentOut(me), siteKey: getSettings().siteKey });
+  if (p === '/api/me') return send(res, 200, { agent: agentOut(me), siteKey: getSettings().siteKey, aiConfigured: !!process.env.ANTHROPIC_API_KEY });
 
   if (p === '/api/events' && m === 'GET') {
     sse(res);
@@ -287,26 +345,32 @@ async function apiRoute(req, res, url) {
     const c = getConv(+x[1]) || fail(404, 'Not found');
     return send(res, 200, { conversation: convOut(c), messages: db.prepare('SELECT * FROM messages WHERE conv_id=? ORDER BY id').all(c.id).map(msgOut) });
   }
-  if ((x = p.match(/^\/api\/conversations\/(\d+)\/(messages|note|read|typing|status|assign)$/)) && m === 'POST') {
+  if ((x = p.match(/^\/api\/conversations\/(\d+)\/(messages|note|read|typing|status|assign|upload)$/)) && m === 'POST') {
     const c = getConv(+x[1]) || fail(404, 'Not found');
-    const b = await readBody(req);
+    const b = await readBody(req, x[2] === 'upload' ? 4_500_000 : 200_000);
     const refresh = () => toAgents('conversation', convOut(getConv(c.id)));
     switch (x[2]) {
       case 'messages': {
         const body = str(b.body, 4000); if (!body) fail(400, 'Empty message');
-        db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(me.id, c.id);
+        db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
+        webhook('message.created', { conversation_id: c.id, sender: 'agent', body });
         return send(res, 200, { message: addMessage(getConv(c.id), 'agent', body, { senderId: me.id, senderName: me.name }) });
       }
       case 'note': {
         const body = str(b.body, 4000); if (!body) fail(400, 'Empty note');
         return send(res, 200, { message: addMessage(c, 'note', body, { senderId: me.id, senderName: me.name }) });
       }
+      case 'upload': {
+        const att = await saveUpload(b);
+        db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
+        return send(res, 200, { message: addMessage(getConv(c.id), 'agent', `📎 ${att.name}`, { senderId: me.id, senderName: me.name, attachment: att }) });
+      }
       case 'read': db.prepare('UPDATE conversations SET unread=0 WHERE id=?').run(c.id); refresh(); return send(res, 200, {});
       case 'typing': toVisitor(c.visitor_id, 'typing', { who: 'agent', name: me.name }); return send(res, 200, {});
       case 'status': {
         const s = b.status === 'closed' ? 'closed' : 'open';
         db.prepare('UPDATE conversations SET status=?, needs_human=0 WHERE id=?').run(s, c.id);
-        if (s === 'closed') addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`);
+        if (s === 'closed') { addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`); toVisitor(c.visitor_id, 'closed', { rating: !!getSettings().ratingEnabled }); webhook('conversation.closed', { conversation_id: c.id }); }
         refresh(); return send(res, 200, {});
       }
       case 'assign': {
@@ -326,6 +390,45 @@ async function apiRoute(req, res, url) {
     const online = [...visitorStreams.keys()];
     const rows = online.length ? db.prepare(`SELECT * FROM visitors WHERE id IN (${online.map(() => '?').join(',')}) ORDER BY last_seen DESC`).all(...online) : [];
     return send(res, 200, { visitors: rows.map(visitorOut) });
+  }
+
+  if (p === '/api/kb') {
+    if (m === 'GET') return send(res, 200, { kb: db.prepare('SELECT * FROM kb ORDER BY id').all() });
+    if (m === 'POST') {
+      admin(); const b = await readBody(req); const q = str(b.question, 300), a = str(b.answer, 3000);
+      if (!q || !a) fail(400, 'Question and answer required');
+      db.prepare('INSERT INTO kb(question,answer) VALUES(?,?)').run(q, a); return send(res, 200, {});
+    }
+  }
+  if ((x = p.match(/^\/api\/kb\/(\d+)$/)) && m === 'DELETE') { admin(); db.prepare('DELETE FROM kb WHERE id=?').run(+x[1]); return send(res, 200, {}); }
+
+  if (p === '/api/analytics' && m === 'GET') {
+    const days = []; const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    for (let i = 13; i >= 0; i--) {
+      const a = d0.getTime() - i * 86400000;
+      days.push({ date: new Date(a).toISOString().slice(0, 10),
+        chats: db.prepare('SELECT COUNT(*) n FROM conversations WHERE created>=? AND created<?').get(a, a + 86400000).n,
+        messages: db.prepare("SELECT COUNT(*) n FROM messages WHERE created>=? AND created<? AND sender!='system'").get(a, a + 86400000).n });
+    }
+    const total = db.prepare('SELECT COUNT(*) n FROM conversations').get().n;
+    const botOnly = db.prepare('SELECT COUNT(*) n FROM conversations WHERE needs_human=0 AND first_reply IS NULL AND bot_active=1').get().n;
+    const fr = db.prepare('SELECT AVG(first_reply) a FROM conversations WHERE first_reply IS NOT NULL').get().a;
+    const cs = db.prepare('SELECT AVG(rating) a, COUNT(rating) n FROM conversations WHERE rating IS NOT NULL').get();
+    return send(res, 200, { days, total, botHandledPct: total ? Math.round(botOnly / total * 100) : 0, avgFirstResponseSec: fr ? Math.round(fr / 1000) : null,
+      csat: cs.n ? Math.round(cs.a * 10) / 10 : null, ratings: cs.n, contacts: db.prepare('SELECT COUNT(*) n FROM visitors WHERE email IS NOT NULL').get().n });
+  }
+  if (p === '/api/export/contacts.csv' && m === 'GET') {
+    const q = v => `"${String(v ?? '').replace(/"/g, '""').replace(/^([=+\-@])/, "'$1")}"`;
+    const rows = db.prepare('SELECT * FROM visitors WHERE email IS NOT NULL ORDER BY created DESC').all();
+    res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="contacts.csv"' });
+    return res.end('name,email,visits,first_seen,last_page\n' + rows.map(v => [v.name, v.email, v.visits, new Date(v.created).toISOString(), v.page].map(q).join(',')).join('\n'));
+  }
+  if ((x = p.match(/^\/api\/conversations\/(\d+)\/transcript$/)) && m === 'GET') {
+    const c = getConv(+x[1]) || fail(404, 'Not found'); const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
+    const lines = db.prepare("SELECT * FROM messages WHERE conv_id=? AND sender!='note' ORDER BY id").all(c.id)
+      .map(mm => `[${new Date(mm.created).toISOString()}] ${mm.sender === 'visitor' ? (v.name || 'Visitor') : mm.sender_name || mm.sender}: ${mm.body}`);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `attachment; filename="conversation-${c.id}.txt"` });
+    return res.end(lines.join('\n'));
   }
 
   if (p === '/api/canned') {
@@ -368,8 +471,11 @@ async function apiRoute(req, res, url) {
       if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail(400, 'Color must be a hex value like #4f46e5');
       if (b.position && !['left', 'right'].includes(b.position)) fail(400, 'Bad position');
       if ('proactiveDelay' in b) b.proactiveDelay = Math.max(0, Math.min(600, Number(b.proactiveDelay) || 0));
-      for (const k of ['askEmail', 'botEnabled', 'proactiveEnabled']) if (k in b) b[k] = !!b[k];
-      for (const k of ['brandName', 'title', 'subtitle', 'greeting', 'offlineMessage', 'handoffMessage', 'fallbackMessage', 'proactiveMessage', 'allowedOrigins']) if (k in b) b[k] = str(b[k], 500);
+      for (const k of ['askEmail', 'botEnabled', 'proactiveEnabled', 'aiEnabled', 'ratingEnabled', 'businessHoursEnabled']) if (k in b) b[k] = !!b[k];
+      for (const k of ['brandName', 'title', 'subtitle', 'greeting', 'offlineMessage', 'handoffMessage', 'fallbackMessage', 'proactiveMessage', 'allowedOrigins', 'aiInstructions', 'webhookUrl', 'timezone', 'hoursStart', 'hoursEnd', 'hoursDays']) if (k in b) b[k] = str(b[k], 500);
+      if (b.timezone) { try { new Intl.DateTimeFormat('en', { timeZone: b.timezone }); } catch { fail(400, 'Unknown timezone'); } }
+      for (const k of ['hoursStart', 'hoursEnd']) if (b[k] && !/^\d\d:\d\d$/.test(b[k])) fail(400, 'Times must look like 09:00');
+      if (b.webhookUrl && !/^https?:\/\//.test(b.webhookUrl)) fail(400, 'Webhook URL must start with http(s)://');
       setSettings(b); return send(res, 200, { settings: getSettings() });
     }
   }
@@ -407,7 +513,19 @@ function ruleFields(b) {
 }
 
 // ---------- static + server ----------
+async function serveUpload(res, url) {
+  const name = path.basename(decodeURIComponent(url.pathname));
+  const ext = name.split('.').pop();
+  const type = Object.keys(UPLOAD_TYPES).find(t => UPLOAD_TYPES[t] === ext);
+  if (!/^[a-f0-9]{24}\.\w+$/.test(name) || !type) fail(404, 'Not found');
+  try {
+    const buf = await readFile(path.join(UPLOAD_DIR, name));
+    res.writeHead(200, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'", 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*', 'Cross-Origin-Resource-Policy': 'cross-origin' });
+    res.end(buf);
+  } catch { fail(404, 'Not found'); }
+}
 async function serveStatic(req, res, url) {
+  if (url.pathname.startsWith('/uploads/')) return serveUpload(res, url);
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/') rel = '/index.html';
   if (rel === '/app' || rel === '/app/') rel = '/app/index.html';

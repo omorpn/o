@@ -49,6 +49,9 @@
     '.card input{border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font:inherit;outline:none}.card input:focus{border-color:var(--c)}',
     '.card button{background:var(--c);color:#fff;border:0;border-radius:8px;padding:8px;font:inherit;font-weight:600;cursor:pointer}',
     '.err{color:#dc2626;font-size:12px}',
+    '.m img{max-width:100%;border-radius:10px;display:block}.m a{color:inherit;text-decoration:underline}',
+    '.stars{display:flex;gap:4px;justify-content:center}.stars button{background:none;border:0;font-size:26px;cursor:pointer;color:#d1d5db;padding:0}.stars button.on{color:#f59e0b}',
+    'form.in .clip{background:none;color:#6b7280;font-size:18px;width:32px}',
     'form.in{display:flex;gap:8px;padding:12px;border-top:1px solid #e5e7eb;background:#fff}',
     'form.in textarea{flex:1;resize:none;border:1px solid #d1d5db;border-radius:20px;padding:9px 14px;font:14px system-ui,sans-serif;outline:none;max-height:90px;height:38px}',
     'form.in textarea:focus{border-color:var(--c)}',
@@ -90,9 +93,14 @@
     info.appendChild(headSub); head.appendChild(info);
     var x = el('button', 'x', '×'); x.setAttribute('aria-label', 'Close'); x.onclick = function () { toggle(false); }; head.appendChild(x);
     msgsEl = el('div', 'msgs'); msgsEl.setAttribute('aria-live', 'polite');
-    var form = el('form', 'in'); inputEl = el('textarea'); inputEl.placeholder = 'Write a message…'; inputEl.rows = 1; inputEl.maxLength = 2000;
+    var form = el('form', 'in');
+    var clip = el('button', 'clip', '📎'); clip.type = 'button'; clip.title = 'Attach a file'; clip.setAttribute('aria-label', 'Attach a file');
+    var file = el('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain'; file.style.display = 'none';
+    clip.onclick = function () { file.click(); };
+    file.onchange = function () { if (file.files[0]) upload(file.files[0]); file.value = ''; };
+    inputEl = el('textarea'); inputEl.placeholder = 'Write a message…'; inputEl.rows = 1; inputEl.maxLength = 2000;
     var btn = el('button', '', '➤'); btn.type = 'submit'; btn.setAttribute('aria-label', 'Send');
-    form.appendChild(inputEl); form.appendChild(btn);
+    form.appendChild(clip); form.appendChild(file); form.appendChild(inputEl); form.appendChild(btn);
     form.onsubmit = function (e) { e.preventDefault(); sendText(inputEl.value); inputEl.value = ''; };
     inputEl.onkeydown = function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
     inputEl.oninput = function () {
@@ -126,7 +134,13 @@
       var prev = state.messages[i - 1];
       if (m.sender !== 'visitor' && (!prev || prev.sender !== m.sender || prev.sender_name !== m.sender_name))
         msgsEl.appendChild(el('div', 'who', m.sender_name || (m.sender === 'bot' ? 'Bot' : 'Team')));
-      msgsEl.appendChild(el('div', 'm ' + m.sender, m.body));
+      var bub = el('div', 'm ' + m.sender);
+      if (m.attachment) {
+        var href = BASE + m.attachment.url;
+        if (/^image\//.test(m.attachment.type)) { var a = el('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; var im = el('img'); im.src = href; im.alt = m.attachment.name; a.appendChild(im); bub.appendChild(a); }
+        else { var l = el('a', '', '📎 ' + m.attachment.name); l.href = href; l.target = '_blank'; l.rel = 'noopener'; bub.appendChild(l); }
+      } else bub.textContent = m.body;
+      msgsEl.appendChild(bub);
       if (m.buttons && m.buttons.length && i === lastIdx) {
         var chips = el('div', 'chips');
         m.buttons.forEach(function (b) { var c = el('button', 'chip', b); c.onclick = function () { sendText(b); }; chips.appendChild(c); });
@@ -134,6 +148,7 @@
       }
     });
     if (state.needEmail) msgsEl.appendChild(emailCard());
+    if (state.closed && state.settings.ratingEnabled) msgsEl.appendChild(ratingCard());
     if (state.typing) { var t = el('div', 'typing'); t.innerHTML = '<i></i><i></i><i></i>'; msgsEl.appendChild(t); }
     msgsEl.scrollTop = msgsEl.scrollHeight;
   }
@@ -153,6 +168,32 @@
     return c;
   }
 
+  function ratingCard() {
+    var c = el('div', 'card');
+    if (state.rated) { c.appendChild(el('div', '', 'Thanks for your feedback! 💜')); return c; }
+    c.appendChild(el('div', '', 'This chat was closed. How did we do?'));
+    var stars = el('div', 'stars'), chosen = 0, btns = [];
+    for (var i = 1; i <= 5; i++) (function (n) { var b = el('button', '', '★'); b.type = 'button'; b.setAttribute('aria-label', n + ' stars');
+      b.onclick = function () { chosen = n; btns.forEach(function (x, j) { x.className = j < n ? 'on' : ''; }); }; btns.push(b); stars.appendChild(b); })(i);
+    var note = el('input'); note.placeholder = 'Any comments? (optional)';
+    var err = el('div', 'err'), send = el('button', '', 'Send feedback');
+    send.onclick = function () {
+      if (!chosen) { err.textContent = 'Pick a rating first'; return; }
+      api('rate', { rating: chosen, comment: note.value }).then(function (r) { if (r.error) err.textContent = r.error; else { state.rated = true; render(); } });
+    };
+    [stars, note, err, send].forEach(function (n) { c.appendChild(n); });
+    return c;
+  }
+  function resetIfClosed() { if (state.closed) { state.closed = false; state.rated = false; state.messages = []; state.ids = {}; state.needEmail = false; } }
+  function upload(f) {
+    if (f.size > 3000000) return alert('File too large (max 3 MB)');
+    var r = new FileReader();
+    r.onload = function () {
+      resetIfClosed();
+      api('upload', { name: f.name, type: f.type, data: String(r.result).split(',')[1] }).then(function (x) { if (x.error) alert(x.error); else if (x.message) addMessage(x.message); });
+    };
+    r.readAsDataURL(f);
+  }
   function addMessage(m) {
     if (state.ids[m.id]) return; state.ids[m.id] = 1; state.messages.push(m);
     if (m.sender !== 'visitor') {
@@ -164,6 +205,7 @@
 
   function sendText(text) {
     text = (text || '').trim(); if (!text) return;
+    resetIfClosed();
     api('message', { body: text, page: location.href }).then(function (r) { if (r.message) addMessage(r.message); });
   }
 
@@ -177,6 +219,7 @@
       var d = JSON.parse(e.data); state.typing = d.who; render();
       clearTimeout(typingTimer); typingTimer = setTimeout(function () { state.typing = null; render(); }, 3500);
     });
+    es.addEventListener('closed', function () { state.closed = true; state.rated = false; state.typing = null; render(); });
     es.addEventListener('handoff', function (e) {
       state.agentsOnline = JSON.parse(e.data).online;
       if (state.settings.askEmail && !state.visitor.email) state.needEmail = true;

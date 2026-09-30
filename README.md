@@ -14,6 +14,8 @@ npm test             # end-to-end smoke tests
 - **Embeddable widget** (`/widget.js`, Shadow-DOM isolated): launcher, proactive greeting bubble, quick-reply buttons, typing indicators, unread badge, email capture, persistent visitor identity and history, live page tracking.
 - **Shared inbox**: realtime conversations, filters (mine / unassigned / needs human / closed), search, assign, close/reopen, internal notes, saved replies (`/shortcut`), sound + desktop notifications, visitor details.
 - **Chatbot builder**: keyword rules with replies, buttons and human handoff; built-in tester; bot stops once an agent replies; offline message when no agent is online.
+- **Knowledge base + AI answers**: Q&A entries answer automatically; set `ANTHROPIC_API_KEY` (optionally `AI_MODEL`) and enable AI to have Claude answer from the knowledge base, handing off when unsure.
+- **Attachments** (images, PDF, text, ≤3 MB) both ways; **satisfaction ratings** when a chat closes; **business hours** with timezone; **webhooks** (`conversation.created`, `message.created`, `visitor.identified`, `conversation.closed`, `conversation.rated`); **analytics** (14-day chart, first-response time, CSAT, bot-only %); transcript and contacts CSV export.
 - **Live visitors** list, overview stats, team management (admin/agent roles), widget appearance & copy settings, allowed-origin control.
 - Security: scrypt password hashes, HttpOnly session cookies, rate limits, XSS-safe rendering, path-traversal guard.
 

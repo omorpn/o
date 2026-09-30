@@ -33,8 +33,13 @@ CREATE TABLE IF NOT EXISTS rules (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL, reply TEXT NOT NULL,
   buttons TEXT NOT NULL DEFAULT '[]', handoff INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS kb (id INTEGER PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS canned (id INTEGER PRIMARY KEY, shortcut TEXT NOT NULL UNIQUE, text TEXT NOT NULL);
 `);
+
+for (const [t, col] of [['messages', 'attachment TEXT'], ['conversations', 'rating INTEGER'], ['conversations', 'rating_comment TEXT'], ['conversations', 'first_reply INTEGER']]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already exists */ }
+}
 
 export const now = () => Date.now();
 
@@ -66,6 +71,15 @@ export const DEFAULT_SETTINGS = {
   proactiveDelay: 8,
   proactiveMessage: 'Need a hand? Ask us anything!',
   allowedOrigins: '*',
+  aiEnabled: false,
+  aiInstructions: 'You are a friendly support assistant for our company. Keep answers short.',
+  ratingEnabled: true,
+  businessHoursEnabled: false,
+  hoursStart: '09:00',
+  hoursEnd: '17:00',
+  hoursDays: '1,2,3,4,5',
+  timezone: 'UTC',
+  webhookUrl: '',
 };
 
 export function getSettings() {
@@ -93,6 +107,10 @@ export function seed() {
     ins.run('Pricing', 'price, pricing, cost, plan, plans', 'Our plans start at $19/month. You can see full details on our pricing page.', '[]', 0, 1);
     ins.run('Shipping', 'shipping, delivery, track, order', 'Orders ship within 24h and arrive in 3–5 business days.', '[]', 0, 2);
     ins.run('Human handoff', 'human, agent, person, support, representative', 'Sure, let me bring in a teammate.', '[]', 1, 3);
+  }
+  if (!db.prepare('SELECT 1 FROM kb LIMIT 1').get()) {
+    db.prepare('INSERT INTO kb(question,answer) VALUES(?,?)').run('What is your return policy?', 'You can return any item within 30 days for a full refund.');
+    db.prepare('INSERT INTO kb(question,answer) VALUES(?,?)').run('What payment methods do you accept?', 'We accept all major credit cards, PayPal and Apple Pay.');
   }
   if (!db.prepare('SELECT 1 FROM canned LIMIT 1').get()) {
     const ins = db.prepare('INSERT INTO canned(shortcut,text) VALUES(?,?)');

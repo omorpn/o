@@ -1,6 +1,6 @@
 (() => {
 const $app = document.getElementById('app');
-const S = { me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
+const S = { aiConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
 let es;
 
 // ---------- utils ----------
@@ -46,7 +46,7 @@ function renderLogin() {
 
 // ---------- shell ----------
 async function boot() {
-  try { const d = await api('/me'); S.me = d.agent; S.siteKey = d.siteKey; } catch { return renderLogin(); }
+  try { const d = await api('/me'); S.me = d.agent; S.siteKey = d.siteKey; S.aiConfigured = d.aiConfigured; } catch { return renderLogin(); }
   if (!S.me) return;
   const [a, c] = await Promise.all([api('/agents'), api('/canned')]);
   S.agents = a.agents; S.canned = c.canned;
@@ -181,10 +181,16 @@ async function openConv(id) {
     ta.value = '';
     await api(`/conversations/${S.cur}/${S.mode === 'note' ? 'note' : 'messages'}`, 'POST', { body });
   });
+  const fileIn = h('input', { type: 'file', style: 'display:none', accept: 'image/png,image/jpeg,image/gif,image/webp,application/pdf,text/plain', onchange: guard(async () => {
+    const f = fileIn.files[0]; fileIn.value = ''; if (!f) return;
+    if (f.size > 3e6) throw new Error('File too large (max 3 MB)');
+    const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(f); });
+    await api(`/conversations/${S.cur}/upload`, 'POST', { name: f.name, type: f.type, data });
+  }) });
   const modeBtn = (m, l, cls) => h('button', { class: (S.mode === m ? 'on ' : '') + cls, onclick: e => { S.mode = m; ta.placeholder = m === 'note' ? 'Internal note — only your team sees this' : 'Type a message…  (type / for saved replies)'; e.target.parentNode.querySelectorAll('button').forEach(b => b.classList.remove('on')); e.target.classList.add('on'); } }, l);
   chat.replaceChildren(h('div', { class: 'hd', id: 'hd' }), h('div', { class: 'msgs', id: 'msgs' }), h('div', { class: 'typing', id: 'typing' }),
     h('div', { class: 'composer' }, menu, h('div', { class: 'modes' }, modeBtn('reply', 'Reply', ''), modeBtn('note', 'Internal note', 'note')), ta,
-      h('div', { class: 'row', style: 'margin-top:6px;justify-content:space-between' }, h('span', { class: 'hint' }, 'Enter to send · Shift+Enter for newline'), h('button', { class: 'btn', onclick: send }, 'Send'))));
+      h('div', { class: 'row', style: 'margin-top:6px;justify-content:space-between' }, h('span', { class: 'hint' }, fileIn, h('button', { class: 'btn sec sm', onclick: () => fileIn.click() }, '📎 Attach'), ' Enter to send · Shift+Enter for newline'), h('button', { class: 'btn', onclick: send }, 'Send'))));
   drawHead(); drawMessages(); drawSide(); drawList(); ta.focus();
 }
 function drawHead() {
@@ -194,6 +200,7 @@ function drawHead() {
   hd.replaceChildren(h('div', { class: 'av' }, initials(c.visitor)), h('div', { class: 'grow', style: 'flex:1' }, h('b', {}, vname(c.visitor)),
     h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '')), assign,
     h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen'),
+    h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, '⬇'),
     S.me.role === 'admin' ? h('button', { class: 'btn danger', title: 'Delete', onclick: guard(async () => { if (confirm('Delete this conversation permanently?')) await api('/conversations/' + c.id, 'DELETE'); }) }, '🗑') : null);
 }
 function drawMessages() {
@@ -203,7 +210,8 @@ function drawMessages() {
     if (m.sender === 'system') { out.push(h('div', { class: 'sysmsg' }, m.body)); prev = null; continue; }
     const key = m.sender + (m.sender_name || '');
     if (key !== prev) out.push(h('div', { class: 'meta' + (m.sender === 'visitor' ? '' : ' r') }, (m.sender === 'visitor' ? vname(S.convs.get(S.cur)?.visitor) : m.sender_name || m.sender) + (m.sender === 'note' ? ' (note)' : '') + ' · ' + new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
-    out.push(h('div', { class: 'msg ' + m.sender }, m.body)); prev = key;
+    const att = m.attachment;
+    out.push(h('div', { class: 'msg ' + m.sender }, att ? (/^image\//.test(att.type) ? h('a', { href: att.url, target: '_blank', rel: 'noopener' }, h('img', { src: att.url, alt: att.name, style: 'max-width:240px;border-radius:8px;display:block' })) : h('a', { href: att.url, target: '_blank', rel: 'noopener', style: 'color:inherit' }, '📎 ' + att.name)) : m.body)); prev = key;
   }
   box.replaceChildren(...out); box.scrollTop = box.scrollHeight; drawTyping();
 }
@@ -224,7 +232,7 @@ function drawSide() {
 
 // ---------- visitors ----------
 async function renderVisitors(main) {
-  main.append(h('div', { class: 'page' }, h('h2', {}, 'Live visitors'), h('div', { class: 'card', id: 'vis' })));
+  main.append(h('div', { class: 'page' }, h('div', { class: 'row', style: 'margin-bottom:16px' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Live visitors'), h('a', { class: 'btn sec', href: '/api/export/contacts.csv', style: 'text-decoration:none' }, 'Export contacts (CSV)')), h('div', { class: 'card', id: 'vis' })));
   const d = await api('/visitors'); S.visitors = new Map(d.visitors.map(v => [v.id, v])); drawVisitors();
 }
 function drawVisitors() {
@@ -242,10 +250,16 @@ function drawVisitors() {
 // ---------- overview ----------
 async function renderDashboard(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const s = await api('/stats');
+  const [s, an] = await Promise.all([api('/stats'), api('/analytics')]);
+  const max = Math.max(1, ...an.days.map(d => d.chats));
   const st = (n, l) => h('div', { class: 'stat' }, h('b', {}, n), h('span', {}, l));
   page.append(h('h2', {}, 'Welcome back, ' + S.me.name), h('div', { class: 'grid' }, st(s.open, 'Open conversations'), st(s.needsHuman, 'Waiting for a human'), st(s.unassigned, 'Unassigned'),
     st(s.visitorsOnline, 'Visitors online'), st(s.today, 'New chats today'), st(s.messagesToday, 'Messages today'), st(s.resolved, 'Resolved total'), st(s.agentsOnline, 'Agents online')),
+    h('div', { class: 'card' }, h('h3', {}, 'Conversations — last 14 days'),
+      h('div', { style: 'display:flex;align-items:flex-end;gap:6px;height:110px;margin:14px 0 4px' }, ...an.days.map(d => h('div', { title: `${d.date}: ${d.chats} chats, ${d.messages} messages`, style: `flex:1;background:#818cf8;border-radius:4px 4px 0 0;height:${Math.max(3, d.chats / max * 100)}%` }))),
+      h('div', { class: 'row hint', style: 'justify-content:space-between' }, h('span', {}, an.days[0].date), h('span', {}, an.days[13].date)),
+      h('div', { class: 'grid', style: 'margin:14px 0 0' }, st(an.avgFirstResponseSec == null ? '—' : an.avgFirstResponseSec < 90 ? an.avgFirstResponseSec + 's' : Math.round(an.avgFirstResponseSec / 60) + 'm', 'Avg first response'),
+        st(an.csat == null ? '—' : an.csat + ' / 5', `Satisfaction (${an.ratings} ratings)`), st(an.botHandledPct + '%', 'Handled by bot only'), st(an.contacts, 'Contacts with email'))),
     h('div', { class: 'card' }, h('h3', {}, 'Get started'), h('p', {}, 'Add the chat widget to your website by pasting this snippet before </body>:'), h('pre', { class: 'code' }, snippet()),
       h('div', { class: 'row' }, h('button', { class: 'btn sec', onclick: () => { navigator.clipboard?.writeText(snippet()); toast('Copied'); } }, 'Copy snippet'), h('a', { href: '/', target: '_blank' }, 'Open demo site ↗'))));
 }
@@ -254,13 +268,23 @@ const snippet = () => `<script src="${location.origin}/widget.js" data-key="${S.
 // ---------- chatbot ----------
 async function renderBot(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const [{ rules }, { settings }] = await Promise.all([api('/rules'), api('/settings')]);
+  const [{ rules }, { settings }, { kb }] = await Promise.all([api('/rules'), api('/settings'), api('/kb')]);
   const admin = S.me.role === 'admin';
   page.append(h('h2', {}, 'Chatbot'),
     h('div', { class: 'card' }, h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.botEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { botEnabled: e.target.checked }); toast('Saved'); }) }), 'Enable chatbot for new conversations'),
       h('div', { class: 'hint' }, 'The bot answers with the first rule that matches, and hands over to a human on request. As soon as an agent replies, the bot stops.'),
       h('label', {}, 'Try it'), h('div', { class: 'row' }, h('input', { id: 'bt', placeholder: 'Type a visitor message to test the rules…', class: 'grow' }),
         h('button', { class: 'btn sec', onclick: guard(async () => { const { rule } = await api('/bot/test', 'POST', { text: document.getElementById('bt').value }); document.getElementById('btr').textContent = rule ? `✓ "${rule.name}" → ${rule.reply}` : '✗ No rule matches — fallback message is sent'; }) }, 'Test')), h('div', { class: 'hint', id: 'btr' })),
+    h('div', { class: 'card' }, h('h3', {}, 'AI answers'),
+      h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.aiEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { aiEnabled: e.target.checked }); toast('Saved'); }) }), 'Use Claude to answer from the knowledge base when no rule matches'),
+      h('div', { class: 'hint' }, S.aiConfigured ? '✓ ANTHROPIC_API_KEY is configured on the server.' : 'Set the ANTHROPIC_API_KEY environment variable on the server to enable this. Without it, the knowledge base still answers by keyword matching.'),
+      h('label', {}, 'Assistant instructions'), h('textarea', { rows: 2, id: 'aiins', disabled: !admin }, settings.aiInstructions),
+      admin ? h('button', { class: 'btn sec sm', style: 'margin-top:6px', onclick: guard(async () => { await api('/settings', 'PUT', { aiInstructions: document.getElementById('aiins').value }); toast('Saved'); }) }, 'Save instructions') : null),
+    h('div', { class: 'card' }, h('h3', {}, 'Knowledge base'), h('div', { class: 'hint' }, 'Question & answer pairs the bot uses when no rule matches (and that the AI answers from).'),
+      ...kb.map(e => h('div', { class: 'row', style: 'padding:8px 0;border-bottom:1px solid var(--bd)' }, h('div', { class: 'grow' }, h('b', {}, e.question), h('div', {}, e.answer)),
+        admin ? h('button', { class: 'btn danger sm', onclick: guard(async () => { await api('/kb/' + e.id, 'DELETE'); renderShell(); }) }, 'Delete') : null)),
+      admin ? h('div', { style: 'margin-top:12px' }, h('input', { id: 'kbq', placeholder: 'Question, e.g. Do you ship internationally?' }), h('textarea', { id: 'kba', rows: 2, placeholder: 'Answer', style: 'margin-top:6px' }),
+        h('button', { class: 'btn sm', style: 'margin-top:6px', onclick: guard(async () => { await api('/kb', 'POST', { question: document.getElementById('kbq').value, answer: document.getElementById('kba').value }); renderShell(); }) }, 'Add entry')) : null),
     h('div', { class: 'row', style: 'margin-bottom:10px' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Rules'), admin ? h('button', { class: 'btn', onclick: () => ruleEditor(main, null) }, '+ New rule') : null),
     ...rules.map(r => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, r.name), ' ', r.handoff ? h('span', { class: 'pill warn' }, 'hands off to human') : null, r.enabled ? null : h('span', { class: 'pill' }, 'disabled'),
       h('div', { class: 'hint' }, 'Keywords: ' + r.keywords), h('div', {}, '💬 ' + r.reply), r.buttons.length ? h('div', { class: 'hint' }, 'Buttons: ' + r.buttons.join(' · ')) : null),
@@ -297,11 +321,14 @@ async function renderSettings(main) {
     page.append(h('div', { class: 'card' }, ...inp('title', 'Widget title'), ...inp('subtitle', 'Subtitle'), ...inp('brandName', 'Brand name (footer)'), ...inp('color', 'Brand color', 'color'),
       h('label', {}, 'Position'), h('select', { id: 's_position', disabled: !admin }, h('option', { value: 'right', selected: s.position === 'right' }, 'Bottom right'), h('option', { value: 'left', selected: s.position === 'left' }, 'Bottom left')),
       ...inp('greeting', 'Welcome message'), ...inp('fallbackMessage', 'Bot fallback message'), ...inp('handoffMessage', 'Handoff message (agents online)'), ...inp('offlineMessage', 'Offline message (no agents online)'),
-      chk('askEmail', 'Ask for email when handing over to a human'), chk('proactiveEnabled', 'Show proactive greeting bubble'), ...inp('proactiveDelay', 'Proactive delay (seconds)', 'number'), ...inp('proactiveMessage', 'Proactive message'),
+      chk('askEmail', 'Ask for email when handing over to a human'), chk('ratingEnabled', 'Ask for a satisfaction rating when a chat is closed'), chk('proactiveEnabled', 'Show proactive greeting bubble'), ...inp('proactiveDelay', 'Proactive delay (seconds)', 'number'), ...inp('proactiveMessage', 'Proactive message'),
+      chk('businessHoursEnabled', 'Only show as online during business hours'), ...inp('hoursStart', 'Opens (HH:MM)'), ...inp('hoursEnd', 'Closes (HH:MM)'),
+      ...inp('hoursDays', 'Open days', 'text', 'Comma-separated, 0 = Sunday … 6 = Saturday, e.g. 1,2,3,4,5'), ...inp('timezone', 'Timezone', 'text', 'IANA name, e.g. America/New_York'),
+      ...inp('webhookUrl', 'Webhook URL', 'text', 'Receives JSON POSTs for conversation.created, message.created, visitor.identified, conversation.closed, conversation.rated'),
       ...inp('allowedOrigins', 'Allowed origins', 'text', 'Use * for any site, or a comma-separated list like https://shop.com,https://www.shop.com'),
       admin ? h('button', { class: 'btn', style: 'margin-top:16px', onclick: guard(async () => {
         const g = k => { const e = document.getElementById('s_' + k); return e.type === 'checkbox' ? e.checked : e.value; };
-        await api('/settings', 'PUT', Object.fromEntries(['title', 'subtitle', 'brandName', 'color', 'position', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage', 'askEmail', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins'].map(k => [k, g(k)])));
+        await api('/settings', 'PUT', Object.fromEntries(['title', 'subtitle', 'brandName', 'color', 'position', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage', 'askEmail', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins', 'ratingEnabled', 'businessHoursEnabled', 'hoursStart', 'hoursEnd', 'hoursDays', 'timezone', 'webhookUrl'].map(k => [k, g(k)])));
         toast('Saved — reload the site to see changes');
       }) }, 'Save changes') : h('div', { class: 'hint' }, 'Only admins can change settings.')));
   } else if (settingsTab === 'install') {
