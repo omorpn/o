@@ -22,7 +22,7 @@
   var host = el('div'); host.style.cssText = 'all:initial;position:fixed;z-index:2147483000;bottom:0;' ;
   var root = host.attachShadow({ mode: 'open' });
   var css = el('style'); css.textContent = [
-    ':host{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}*{box-sizing:border-box}',
+    '*{box-sizing:border-box}.wrap,button,input,textarea{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}',
     '.wrap{position:fixed;bottom:20px;display:flex;flex-direction:column;align-items:flex-end;gap:12px}',
     '.wrap.left{left:20px;align-items:flex-start}.wrap.right{right:20px}',
     '.launcher{width:60px;height:60px;border-radius:50%;border:0;cursor:pointer;background:var(--c);color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;position:relative;transition:transform .15s}',
@@ -219,10 +219,10 @@
       var d = JSON.parse(e.data); state.typing = d.who; render();
       clearTimeout(typingTimer); typingTimer = setTimeout(function () { state.typing = null; render(); }, 3500);
     });
-    es.addEventListener('closed', function () { state.closed = true; state.rated = false; state.typing = null; render(); });
+    es.addEventListener('closed', function () { state.closed = true; state.rated = false; state.typing = null; state.needEmail = false; render(); });
     es.addEventListener('handoff', function (e) {
-      state.agentsOnline = JSON.parse(e.data).online;
-      if (state.settings.askEmail && !state.visitor.email) state.needEmail = true;
+      var d = JSON.parse(e.data); state.agentsOnline = d.online;
+      if (state.settings.askEmail && !d.hasEmail) state.needEmail = true;
       renderStatus(); render();
     });
   }

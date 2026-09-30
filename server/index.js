@@ -190,7 +190,7 @@ function handoff(conv) {
   db.prepare('UPDATE conversations SET bot_active=0, needs_human=1 WHERE id=?').run(conv.id);
   const fresh = getConv(conv.id);
   addMessage(fresh, 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
-  toVisitor(conv.visitor_id, 'handoff', { online });
+  toVisitor(conv.visitor_id, 'handoff', { online, hasEmail: !!db.prepare('SELECT email FROM visitors WHERE id=?').get(conv.visitor_id)?.email });
   maybeNotify(conv.id);
   toAgents('conversation', convOut(getConv(conv.id)));
 }
