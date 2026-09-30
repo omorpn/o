@@ -36,10 +36,11 @@ CREATE TABLE IF NOT EXISTS rules (
   enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS kb (id INTEGER PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS flows (id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL, nodes TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS triggers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, url_contains TEXT NOT NULL DEFAULT '', delay INTEGER NOT NULL DEFAULT 10, message TEXT NOT NULL, open_chat INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS canned (id INTEGER PRIMARY KEY, shortcut TEXT NOT NULL UNIQUE, text TEXT NOT NULL);
 `);
 
-for (const [t, col] of [['messages', 'attachment TEXT'], ['conversations', 'rating INTEGER'], ['conversations', 'rating_comment TEXT'], ['conversations', 'first_reply INTEGER'], ['conversations', 'flow_state TEXT'], ['conversations', 'last_notified INTEGER']]) {
+for (const [t, col] of [['messages', 'attachment TEXT'], ['conversations', 'rating INTEGER'], ['conversations', 'rating_comment TEXT'], ['conversations', 'first_reply INTEGER'], ['conversations', 'flow_state TEXT'], ['conversations', 'last_notified INTEGER'], ['conversations', 'tags TEXT'], ['visitors', 'notes TEXT']]) {
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already exists */ }
 }
 
@@ -82,6 +83,13 @@ export const DEFAULT_SETTINGS = {
   hoursDays: '1,2,3,4,5',
   timezone: 'UTC',
   webhookUrl: '',
+  gradient: true,
+  launcherStyle: 'circle',
+  launcherLabel: 'Chat with us',
+  avatarUrl: '',
+  theme: 'light',
+  prechatForm: false,
+  showBranding: true,
   emailNotifications: true,
   emailReplies: true,
   emailTranscript: false,
@@ -126,6 +134,9 @@ export function seed() {
       { id: 'n5', type: 'message', text: 'Our plans start at $19/month — full details on the pricing page.', next: 'n7' },
       { id: 'n6', type: 'handoff', text: 'Great, bringing in our sales team now.' },
       { id: 'n7', type: 'end', text: '' }]));
+  }
+  if (!db.prepare('SELECT 1 FROM triggers LIMIT 1').get()) {
+    db.prepare('INSERT INTO triggers(name,url_contains,delay,message,open_chat) VALUES(?,?,?,?,?)').run('Pricing page help', '/pricing', 15, 'Questions about our plans? I can help you pick the right one.', 0);
   }
   if (!db.prepare('SELECT 1 FROM canned LIMIT 1').get()) {
     const ins = db.prepare('INSERT INTO canned(shortcut,text) VALUES(?,?)');

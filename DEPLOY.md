@@ -1,7 +1,23 @@
 # Deploying Chatly to Firebase
 
 Chatly is a long-running Node server (SSE + SQLite), so it can't run as static Firebase Hosting or as Cloud Functions.
-The supported Firebase path is **Cloud Run behind Firebase Hosting**. Run these on your machine (they need your Google login):
+The supported Firebase path is **Cloud Run behind Firebase Hosting**.
+
+## Easiest: Google Cloud Shell (nothing to install)
+Open https://shell.cloud.google.com (it already has `gcloud`, `firebase` and `git`), then:
+
+```bash
+git clone -b claude/gallant-thompson-k1jkp5 https://github.com/omorpn/o.git chatly && cd chatly
+gcloud config set project YOUR_FIREBASE_PROJECT_ID
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+cp .firebaserc.example .firebaserc && sed -i "s/YOUR_FIREBASE_PROJECT_ID/$(gcloud config get-value project)/" .firebaserc
+# then run steps 1 and 2 below from inside the chatly folder
+```
+Your Firebase project must be on the **Blaze (pay-as-you-go)** plan to use Cloud Run.
+
+## Or on your own machine
+Install the Google Cloud CLI first (Windows: https://cloud.google.com/sdk/docs/install), clone the repo as above and **run every command from inside the repo folder**.
+
 
 ```bash
 npm i -g firebase-tools && firebase login

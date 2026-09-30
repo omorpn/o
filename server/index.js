@@ -89,7 +89,7 @@ function convOut(c) {
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
   const a = c.assignee_id ? db.prepare('SELECT name FROM agents WHERE id=?').get(c.assignee_id) : null;
   return { id: c.id, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
-    needs_human: !!c.needs_human, unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
+    needs_human: !!c.needs_human, tags: c.tags ? JSON.parse(c.tags) : [], unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
 }
 const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, created: m.created });
 const getConv = id => db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
@@ -99,7 +99,7 @@ function addMessage(conv, sender, body, { senderId = null, senderName = null, bu
   const info = db.prepare('INSERT INTO messages(conv_id,sender,sender_id,sender_name,body,buttons,attachment,created) VALUES(?,?,?,?,?,?,?,?)')
     .run(conv.id, sender, senderId, senderName, body, buttons?.length ? JSON.stringify(buttons) : null, attachment ? JSON.stringify(attachment) : null, t);
   if (sender !== 'note') {
-    db.prepare('UPDATE conversations SET last_body=?, updated=?, unread=unread+? WHERE id=?').run(body.slice(0, 140), t, sender === 'visitor' ? 1 : 0, conv.id);
+    db.prepare('UPDATE conversations SET last_body=CASE WHEN ? THEN last_body ELSE ? END, updated=?, unread=unread+? WHERE id=?').run(sender === 'system' ? 1 : 0, body.slice(0, 140), t, sender === 'visitor' ? 1 : 0, conv.id);
   }
   const m = msgOut(db.prepare('SELECT * FROM messages WHERE id=?').get(info.lastInsertRowid));
   const c = convOut(getConv(conv.id));
@@ -263,7 +263,8 @@ function widgetCtx(key, vid) {
   if (key !== getSettings().siteKey) fail(403, 'Invalid site key');
   if (!VID.test(vid || '')) fail(400, 'Invalid visitor id');
 }
-const publicSettings = s => ({ ratingEnabled: s.ratingEnabled, title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting,
+const publicSettings = s => ({ gradient: s.gradient, launcherStyle: s.launcherStyle, launcherLabel: s.launcherLabel, avatarUrl: s.avatarUrl, theme: s.theme, prechatForm: s.prechatForm, showBranding: s.showBranding,
+  triggers: db.prepare('SELECT id,url_contains,delay,message,open_chat FROM triggers WHERE enabled=1').all().map(t => ({ ...t, open_chat: !!t.open_chat })), ratingEnabled: s.ratingEnabled, title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting,
   askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
 
 async function widgetRoute(req, res, url) {
@@ -312,6 +313,9 @@ async function widgetRoute(req, res, url) {
     const body = str(b.body, 2000); if (!body) fail(400, 'Empty message');
     upsertVisitor(b.vid, str(b.page, 500), req);
     const conv = openConversation(b.vid);
+    if (b.trigger && db.prepare('SELECT COUNT(*) n FROM messages WHERE conv_id=?').get(conv.id).n === 0) {
+      const t = db.prepare('SELECT message FROM triggers WHERE id=?').get(Number(b.trigger)); if (t) addMessage(conv, 'bot', t.message, { senderName: 'Bot' });
+    }
     const m = addMessage(conv, 'visitor', body);
     webhook('message.created', { conversation_id: conv.id, sender: 'visitor', body, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid)) });
     botRespond(conv.id, body);
@@ -415,6 +419,7 @@ async function apiRoute(req, res, url) {
     if (f === 'mine') { sql += ' AND c.assignee_id=?'; args.push(me.id); }
     if (f === 'unassigned') sql += ' AND c.assignee_id IS NULL';
     if (f === 'human') sql += ' AND c.needs_human=1';
+    if (url.searchParams.get('tag')) { sql += ' AND c.tags LIKE ?'; args.push(`%"${str(url.searchParams.get('tag'), 24).replace(/[%_"]/g, '')}"%`); }
     if (q) { sql += ' AND (v.name LIKE ? OR v.email LIKE ? OR c.last_body LIKE ?)'; args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
     sql += ' ORDER BY c.needs_human DESC, c.updated DESC LIMIT 200';
     return send(res, 200, { conversations: db.prepare(sql).all(...args).map(convOut) });
@@ -423,7 +428,7 @@ async function apiRoute(req, res, url) {
     const c = getConv(+x[1]) || fail(404, 'Not found');
     return send(res, 200, { conversation: convOut(c), messages: db.prepare('SELECT * FROM messages WHERE conv_id=? ORDER BY id').all(c.id).map(msgOut) });
   }
-  if ((x = p.match(/^\/api\/conversations\/(\d+)\/(messages|note|read|typing|status|assign|upload)$/)) && m === 'POST') {
+  if ((x = p.match(/^\/api\/conversations\/(\d+)\/(messages|note|read|typing|status|assign|upload|tags)$/)) && m === 'POST') {
     const c = getConv(+x[1]) || fail(404, 'Not found');
     const b = await readBody(req, x[2] === 'upload' ? 4_500_000 : 200_000);
     const refresh = () => toAgents('conversation', convOut(getConv(c.id)));
@@ -443,6 +448,10 @@ async function apiRoute(req, res, url) {
         const att = await saveUpload(b);
         db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
         return send(res, 200, { message: addMessage(getConv(c.id), 'agent', `📎 ${att.name}`, { senderId: me.id, senderName: me.name, attachment: att }) });
+      }
+      case 'tags': {
+        const tags = [...new Set((Array.isArray(b.tags) ? b.tags : []).map(t => str(t, 24).toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '')).filter(Boolean))].slice(0, 8);
+        db.prepare('UPDATE conversations SET tags=? WHERE id=?').run(tags.length ? JSON.stringify(tags) : null, c.id); refresh(); return send(res, 200, { tags });
       }
       case 'read': db.prepare('UPDATE conversations SET unread=0 WHERE id=?').run(c.id); refresh(); return send(res, 200, {});
       case 'typing': toVisitor(c.visitor_id, 'typing', { who: 'agent', name: me.name }); return send(res, 200, {});
@@ -528,6 +537,39 @@ async function apiRoute(req, res, url) {
     return res.end(lines.join('\n'));
   }
 
+  if (p === '/api/contacts' && m === 'GET') {
+    const q = str(url.searchParams.get('q') || '', 100);
+    const rows = db.prepare(`SELECT v.*, (SELECT COUNT(*) FROM conversations c WHERE c.visitor_id=v.id) convs FROM visitors v
+      WHERE (v.email IS NOT NULL OR v.name IS NOT NULL) AND (?='' OR v.name LIKE ? OR v.email LIKE ?) ORDER BY v.last_seen DESC LIMIT 300`).all(q, `%${q}%`, `%${q}%`);
+    return send(res, 200, { contacts: rows.map(v => ({ ...visitorOut(v), notes: v.notes, conversations: v.convs })) });
+  }
+  if ((x = p.match(/^\/api\/contacts\/([\w-]+)$/))) {
+    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(x[1]) || fail(404, 'Not found');
+    if (m === 'GET') return send(res, 200, { contact: { ...visitorOut(v), notes: v.notes },
+      conversations: db.prepare('SELECT * FROM conversations WHERE visitor_id=? ORDER BY id DESC').all(v.id).map(convOut) });
+    if (m === 'PUT') {
+      const b = await readBody(req); const email = str(b.email, 200).toLowerCase();
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Invalid email');
+      db.prepare('UPDATE visitors SET name=?, email=?, notes=? WHERE id=?').run(str(b.name, 100) || null, email || null, str(b.notes, 2000) || null, v.id);
+      toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(v.id)) });
+      return send(res, 200, {});
+    }
+  }
+  if (p === '/api/triggers' && m === 'GET') return send(res, 200, { triggers: db.prepare('SELECT * FROM triggers ORDER BY id').all().map(t => ({ ...t, open_chat: !!t.open_chat, enabled: !!t.enabled })) });
+  if (p === '/api/triggers' && m === 'POST') {
+    admin(); const t = triggerFields(await readBody(req));
+    return send(res, 200, { id: db.prepare('INSERT INTO triggers(name,url_contains,delay,message,open_chat,enabled) VALUES(?,?,?,?,?,?)').run(t.name, t.url, t.delay, t.message, t.open, t.enabled).lastInsertRowid });
+  }
+  if ((x = p.match(/^\/api\/triggers\/(\d+)$/))) {
+    admin();
+    if (m === 'PUT') { const t = triggerFields(await readBody(req)); db.prepare('UPDATE triggers SET name=?,url_contains=?,delay=?,message=?,open_chat=?,enabled=? WHERE id=?').run(t.name, t.url, t.delay, t.message, t.open, t.enabled, +x[1]); return send(res, 200, {}); }
+    if (m === 'DELETE') { db.prepare('DELETE FROM triggers WHERE id=?').run(+x[1]); return send(res, 200, {}); }
+  }
+  if (p === '/api/tags' && m === 'GET') {
+    const counts = {}; for (const r of db.prepare('SELECT tags FROM conversations WHERE tags IS NOT NULL').all()) for (const t of JSON.parse(r.tags)) counts[t] = (counts[t] || 0) + 1;
+    return send(res, 200, { tags: Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) });
+  }
+
   if (p === '/api/canned') {
     if (m === 'GET') return send(res, 200, { canned: db.prepare('SELECT * FROM canned ORDER BY shortcut').all() });
     if (m === 'POST') {
@@ -567,9 +609,12 @@ async function apiRoute(req, res, url) {
       admin(); const b = await readBody(req); delete b.siteKey;
       if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail(400, 'Color must be a hex value like #4f46e5');
       if (b.position && !['left', 'right'].includes(b.position)) fail(400, 'Bad position');
+      if (b.launcherStyle && !['circle', 'pill'].includes(b.launcherStyle)) fail(400, 'Bad launcher style');
+      if (b.theme && !['light', 'dark', 'auto'].includes(b.theme)) fail(400, 'Bad theme');
+      if (b.avatarUrl && !/^https?:\/\/|^\//.test(b.avatarUrl)) fail(400, 'Avatar must be an http(s) URL');
       if ('proactiveDelay' in b) b.proactiveDelay = Math.max(0, Math.min(600, Number(b.proactiveDelay) || 0));
-      for (const k of ['emailNotifications', 'emailReplies', 'emailTranscript', 'askEmail', 'botEnabled', 'proactiveEnabled', 'aiEnabled', 'ratingEnabled', 'businessHoursEnabled']) if (k in b) b[k] = !!b[k];
-      for (const k of ['brandName', 'title', 'subtitle', 'greeting', 'offlineMessage', 'handoffMessage', 'fallbackMessage', 'proactiveMessage', 'allowedOrigins', 'aiInstructions', 'webhookUrl', 'timezone', 'hoursStart', 'hoursEnd', 'hoursDays']) if (k in b) b[k] = str(b[k], 500);
+      for (const k of ['gradient', 'prechatForm', 'showBranding', 'emailNotifications', 'emailReplies', 'emailTranscript', 'askEmail', 'botEnabled', 'proactiveEnabled', 'aiEnabled', 'ratingEnabled', 'businessHoursEnabled']) if (k in b) b[k] = !!b[k];
+      for (const k of ['brandName', 'title', 'subtitle', 'greeting', 'offlineMessage', 'handoffMessage', 'fallbackMessage', 'proactiveMessage', 'allowedOrigins', 'aiInstructions', 'launcherLabel', 'avatarUrl', 'webhookUrl', 'timezone', 'hoursStart', 'hoursEnd', 'hoursDays']) if (k in b) b[k] = str(b[k], 500);
       if (b.timezone) { try { new Intl.DateTimeFormat('en', { timeZone: b.timezone }); } catch { fail(400, 'Unknown timezone'); } }
       for (const k of ['hoursStart', 'hoursEnd']) if (b[k] && !/^\d\d:\d\d$/.test(b[k])) fail(400, 'Times must look like 09:00');
       if (b.webhookUrl && !/^https?:\/\//.test(b.webhookUrl)) fail(400, 'Webhook URL must start with http(s)://');
@@ -602,6 +647,11 @@ async function apiRoute(req, res, url) {
   fail(404, 'Not found');
 }
 function toVisitorsAll(event, data) { const f = frame(event, data); for (const set of visitorStreams.values()) for (const r of set) r.write(f); }
+function triggerFields(b) {
+  const name = str(b.name, 80), message = str(b.message, 500);
+  if (!name || !message) fail(400, 'Name and message are required');
+  return { name, message, url: str(b.url_contains, 200), delay: Math.max(0, Math.min(600, Math.round(Number(b.delay)) || 0)), open: b.open_chat ? 1 : 0, enabled: b.enabled === false ? 0 : 1 };
+}
 function flowFields(b) {
   const name = str(b.name, 80), keywords = str(b.keywords, 500);
   if (!name || !keywords) fail(400, 'Name and trigger keywords are required');

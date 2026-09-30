@@ -1,6 +1,6 @@
 (() => {
 const $app = document.getElementById('app');
-const S = { aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
+const S = { tag: '', tags: [], aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
 let es;
 
 // ---------- utils ----------
@@ -26,6 +26,36 @@ async function api(path, method = 'GET', body) {
 function toast(msg) { const t = h('div', { class: 'toast' }, msg); document.body.append(t); setTimeout(() => t.remove(), 2500); }
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
 const vname = v => v?.name || v?.email || 'Visitor ' + (v?.id || '').slice(1, 6);
+const ICONS = {
+  logo: '<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.6-.8L3 21l1.9-5.4A8.4 8.4 0 1 1 21 11.5z"/>',
+  home: '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+  eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8 14h.01M16 14h.01M9 18h6"/><circle cx="12" cy="3" r="1"/>',
+  zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9z"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  check: '<path d="M20 6L9 17l-5-5"/>',
+  star: '<path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>',
+  clip: '<path d="M21.4 11.1l-9.2 9.2a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
+};
+const icon = (n, size) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', 'i'); if (size) { s.style.width = s.style.height = size + 'px'; } s.innerHTML = ICONS[n] || ''; return s; };
+const HUES = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#0ea5e9', '#14b8a6', '#eab308'];
+const hueOf = str => HUES[[...String(str || '?')].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length];
+const avEl = (v, extra) => h('div', { class: 'av', style: `background:${hueOf(v?.id || v?.name)}` }, initials(v), extra);
+const setTheme = t => { document.documentElement.dataset.theme = t; try { localStorage.setItem('chatly_theme', t); } catch {} };
+try { setTheme(localStorage.getItem('chatly_theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); } catch {}
 const initials = v => vname(v).replace(/^Visitor /, '').slice(0, 2).toUpperCase();
 const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message); } };
 function beep() { try { const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.setValueAtTime(.08, c.currentTime); g.gain.exponentialRampToValueAtTime(.001, c.currentTime + .25); o.start(); o.stop(c.currentTime + .25); } catch {} }
@@ -36,12 +66,12 @@ function renderLogin() {
   const err = h('div', { class: 'err' });
   const email = h('input', { type: 'email', placeholder: 'you@company.com', autocomplete: 'username', required: true });
   const pw = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', required: true });
-  $app.replaceChildren(h('form', { class: 'login', onsubmit: async e => {
+  $app.replaceChildren(h('div', { class: 'login-bg' }, h('form', { class: 'login', onsubmit: async e => {
     e.preventDefault();
     try { await api('/auth/login', 'POST', { email: email.value, password: pw.value }); boot(); } catch (x) { err.textContent = x.message; }
-  } }, h('h1', {}, '💬 Chatly'), h('div', { class: 'hint' }, 'Sign in to your dashboard'),
+  } }, h('div', { class: 'logo' }, icon('logo')), h('h1', {}, 'Welcome back'), h('div', { class: 'hint' }, 'Sign in to your Chatly dashboard'),
     h('label', {}, 'Email'), email, h('label', {}, 'Password'), pw, err,
-    h('button', { class: 'btn', style: 'width:100%;margin-top:16px' }, 'Sign in')));
+    h('button', { class: 'btn', style: 'width:100%;margin-top:18px;justify-content:center;padding:11px' }, 'Sign in'))));
 }
 
 // ---------- shell ----------
@@ -55,18 +85,24 @@ async function boot() {
 }
 function totalUnread() { let n = 0; for (const c of S.convs.values()) if (c.status === 'open') n += c.unread ? 1 : 0; return n; }
 function renderShell() {
-  const link = (v, icon, label) => h('a', { class: S.view === v ? 'on' : '', onclick: () => { S.view = v; renderShell(); } }, icon, h('span', { class: 'lbl' }, label),
+  const link = (v, ic, label) => h('a', { 'data-v': v, class: S.view === v ? 'on' : '', onclick: () => { S.view = v; renderShell(); } }, icon(ic), h('span', { class: 'lbl' }, label),
     v === 'inbox' && totalUnread() ? h('span', { class: 'cnt' }, totalUnread()) : null);
-  const views = { inbox: renderInbox, visitors: renderVisitors, bot: renderBot, settings: renderSettings, dashboard: renderDashboard };
+  const views = { inbox: renderInbox, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
   const main = h('div', { class: 'main', id: 'main' });
+  const dark = document.documentElement.dataset.theme === 'dark';
   $app.replaceChildren(h('div', { class: 'shell' },
-    h('div', { class: 'nav' }, h('div', { class: 'brand' }, '💬 Chatly'),
-      link('dashboard', '📊', 'Overview'), link('inbox', '📥', 'Inbox'), link('visitors', '👀', 'Visitors'), link('bot', '🤖', 'Chatbot'), link('settings', '⚙️', 'Settings'),
-      h('div', { class: 'me' }, h('b', {}, S.me.name), S.me.role, h('br'), h('button', { onclick: async () => { await api('/auth/logout', 'POST'); S.me = null; renderLogin(); } }, 'Sign out'))),
+    h('div', { class: 'nav' }, h('div', { class: 'brand' }, h('div', { class: 'lg' }, icon('logo')), h('span', {}, 'Chatly')),
+      link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox'),
+      h('div', { class: 'sec' }, 'People'), link('contacts', 'users', 'Contacts'), link('visitors', 'eye', 'Live visitors'),
+      h('div', { class: 'sec' }, 'Automation'), link('bot', 'bot', 'Chatbot & flows'), link('triggers', 'zap', 'Triggers'),
+      h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings'),
+      h('a', { onclick: () => { setTheme(dark ? 'light' : 'dark'); renderShell(); } }, icon(dark ? 'sun' : 'moon'), h('span', { class: 'lbl' }, dark ? 'Light mode' : 'Dark mode')),
+      h('div', { class: 'me' }, avEl({ id: S.me.email, name: S.me.name }), h('div', {}, h('b', {}, S.me.name), h('small', {}, S.me.role)),
+        h('button', { title: 'Sign out', onclick: async () => { await api('/auth/logout', 'POST'); S.me = null; renderLogin(); } }, icon('logout')))),
     main));
   views[S.view](main);
 }
-const refreshNavBadge = () => { const a = document.querySelector('.nav a:nth-child(3)'); if (!a) return; a.querySelector('.cnt')?.remove(); if (totalUnread()) a.append(h('span', { class: 'cnt' }, totalUnread())); };
+const refreshNavBadge = () => { const a = document.querySelector('.nav a[data-v=inbox]'); if (!a) return; a.querySelector('.cnt')?.remove(); if (totalUnread()) a.append(h('span', { class: 'cnt' }, totalUnread())); };
 
 // ---------- realtime ----------
 function connect() {
@@ -90,7 +126,7 @@ function connect() {
   });
   es.addEventListener('conversation', e => {
     const c = JSON.parse(e.data); S.convs.set(c.id, c);
-    if (S.view === 'inbox') { drawList(); if (S.cur === c.id) { drawHead(); drawSide(); } }
+    if (S.view === 'inbox') { drawList(); if (S.cur === c.id) { drawHead(); drawSide(); const tb = document.getElementById('tagbar'); if (tb && !tb.contains(document.activeElement)) drawTags(); } }
     refreshNavBadge();
   });
   es.addEventListener('deleted', e => { const { id } = JSON.parse(e.data); S.convs.delete(id); if (S.cur === id) { S.cur = null; } if (S.view === 'inbox') renderShell(); });
@@ -112,12 +148,14 @@ async function loadConvs() {
   const p = new URLSearchParams();
   if (S.filter === 'closed') p.set('status', 'closed'); else { p.set('status', 'open'); if (S.filter !== 'open') p.set('filter', S.filter); }
   if (S.q) p.set('q', S.q);
+  if (S.tag) p.set('tag', S.tag);
   const d = await api('/conversations?' + p);
   S.convs = new Map(d.conversations.map(c => [c.id, c]));
   drawList(); refreshNavBadge();
 }
 function visibleConvs() {
   return [...S.convs.values()].filter(c => {
+    if (S.tag && !(c.tags || []).includes(S.tag)) return false;
     if (S.filter === 'closed') return c.status === 'closed';
     if (c.status !== 'open') return false;
     if (S.filter === 'mine') return c.assignee_id === S.me.id;
@@ -127,12 +165,14 @@ function visibleConvs() {
   }).sort((a, b) => (b.needs_human - a.needs_human) || b.updated - a.updated);
 }
 function renderInbox(main) {
+  api('/tags').then(d => { const changed = JSON.stringify(d.tags) !== JSON.stringify(S.tags); S.tags = d.tags; if (changed && S.view === 'inbox' && !document.querySelector('.filters + .filters') && S.tags.length) renderShell(); }).catch(() => {});
   main.append(h('div', { class: 'inbox' },
     h('div', { class: 'list' },
       h('div', { class: 'top' },
         h('input', { placeholder: 'Search conversations…', value: S.q, oninput: debounce(e => { S.q = e.target.value; loadConvs(); }, 250) }),
         h('div', { class: 'filters' }, ...[['open', 'All open'], ['mine', 'Mine'], ['unassigned', 'Unassigned'], ['human', 'Needs human'], ['closed', 'Closed']]
-          .map(([k, l]) => h('button', { class: S.filter === k ? 'on' : '', onclick: () => { S.filter = k; renderShell(); } }, l)))),
+          .map(([k, l]) => h('button', { class: S.filter === k ? 'on' : '', onclick: () => { S.filter = k; renderShell(); } }, l))),
+        S.tags.length ? h('div', { class: 'filters' }, h('span', { class: 'hint', style: 'margin:0 4px 0 0' }, 'Tags:'), ...S.tags.slice(0, 8).map(t => h('button', { class: S.tag === t.name ? 'on' : '', onclick: () => { S.tag = S.tag === t.name ? '' : t.name; renderShell(); } }, `${t.name} ${t.count}`))) : null),
       h('div', { class: 'items', id: 'items' })),
     h('div', { class: 'chat', id: 'chat' }), h('div', { class: 'side', id: 'side' })));
   loadConvs().then(() => { if (S.cur && S.convs.has(S.cur)) openConv(S.cur); else drawChatEmpty(); });
@@ -142,12 +182,12 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 function drawList() {
   const box = document.getElementById('items'); if (!box) return;
   const list = visibleConvs();
-  box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : ''), onclick: () => openConv(c.id) },
-    h('div', { class: 'av' }, initials(c.visitor), c.visitor.online ? h('span', { class: 'on-dot' }) : null),
+  box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : '') + (c.unread ? ' unr' : ''), onclick: () => openConv(c.id) },
+    avEl(c.visitor, c.visitor.online ? h('span', { class: 'on-dot' }) : null),
     h('div', { style: 'min-width:0;flex:1' },
       h('div', { class: 'nm' }, vname(c.visitor), c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
       h('div', { class: 'lb' }, c.last_body || '…'),
-      c.assignee_name ? h('div', { class: 'hint' }, '→ ' + c.assignee_name) : null))) : [h('div', { class: 'empty', style: 'padding:40px 10px' }, 'No conversations here')]));
+      h('div', { class: 'row', style: 'gap:5px;margin-top:3px;flex-wrap:wrap' }, ...(c.tags || []).slice(0, 3).map(t => h('span', { class: 'tag' }, t)), c.assignee_name ? h('span', { class: 'hint', style: 'margin:0' }, '→ ' + c.assignee_name) : null)))) : [h('div', { class: 'empty' }, h('div', { class: 'big' }, '🎉'), 'No conversations here')]));
 }
 function drawChatEmpty() { const c = document.getElementById('chat'); if (c) c.replaceChildren(h('div', { class: 'empty' }, h('div', { style: 'font-size:40px' }, '💬'), 'Select a conversation')); drawSide(); }
 async function openConv(id) {
@@ -188,25 +228,39 @@ async function openConv(id) {
     await api(`/conversations/${S.cur}/upload`, 'POST', { name: f.name, type: f.type, data });
   }) });
   const modeBtn = (m, l, cls) => h('button', { class: (S.mode === m ? 'on ' : '') + cls, onclick: e => { S.mode = m; ta.placeholder = m === 'note' ? 'Internal note — only your team sees this' : 'Type a message…  (type / for saved replies)'; e.target.parentNode.querySelectorAll('button').forEach(b => b.classList.remove('on')); e.target.classList.add('on'); } }, l);
-  chat.replaceChildren(h('div', { class: 'hd', id: 'hd' }), h('div', { class: 'msgs', id: 'msgs' }), h('div', { class: 'typing', id: 'typing' }),
+  chat.replaceChildren(h('div', { class: 'hd', id: 'hd' }), h('div', { class: 'tagbar', id: 'tagbar' }), h('div', { class: 'msgs', id: 'msgs' }), h('div', { class: 'typing', id: 'typing' }),
     h('div', { class: 'composer' }, menu, h('div', { class: 'modes' }, modeBtn('reply', 'Reply', ''), modeBtn('note', 'Internal note', 'note')), ta,
-      h('div', { class: 'row', style: 'margin-top:6px;justify-content:space-between' }, h('span', { class: 'hint' }, fileIn, h('button', { class: 'btn sec sm', onclick: () => fileIn.click() }, '📎 Attach'), ' Enter to send · Shift+Enter for newline'), h('button', { class: 'btn', onclick: send }, 'Send'))));
-  drawHead(); drawMessages(); drawSide(); drawList(); ta.focus();
+      h('div', { class: 'row', style: 'margin-top:6px;justify-content:space-between' }, h('span', { class: 'row hint' }, fileIn, h('button', { class: 'btn sec sm', onclick: () => fileIn.click() }, icon('clip', 14), 'Attach'), h('button', { class: 'btn sec sm', onclick: e => toggleEmoji(e.currentTarget, ta) }, icon('smile', 14), 'Emoji'), ' Enter to send · Shift+Enter for newline'), h('button', { class: 'btn', onclick: send }, 'Send'))));
+  drawHead(); drawTags(); drawMessages(); drawSide(); drawList(); ta.focus();
 }
 function drawHead() {
   const hd = document.getElementById('hd'), c = S.convs.get(S.cur); if (!hd || !c) return;
   const assign = h('select', { onchange: guard(async e => { await api(`/conversations/${c.id}/assign`, 'POST', { agent_id: e.target.value ? +e.target.value : null }); }) },
     h('option', { value: '' }, 'Unassigned'), ...S.agents.map(a => h('option', { value: a.id, selected: a.id === c.assignee_id }, a.name)));
-  hd.replaceChildren(h('div', { class: 'av' }, initials(c.visitor)), h('div', { class: 'grow', style: 'flex:1' }, h('b', {}, vname(c.visitor)),
+  hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1' }, h('b', {}, vname(c.visitor)),
     h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '')), assign,
     h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen'),
-    h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, '⬇'),
-    S.me.role === 'admin' ? h('button', { class: 'btn danger', title: 'Delete', onclick: guard(async () => { if (confirm('Delete this conversation permanently?')) await api('/conversations/' + c.id, 'DELETE'); }) }, '🗑') : null);
+    h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, icon('download')),
+    S.me.role === 'admin' ? h('button', { class: 'btn danger', title: 'Delete conversation', onclick: guard(async () => { if (confirm('Delete this conversation permanently?')) await api('/conversations/' + c.id, 'DELETE'); }) }, icon('trash')) : null);
+}
+const EMOJI = [...'😀😃😄😁😆😅😂🤣😊😇🙂😉😍🥰😘😋😎🤩🥳🤔🙄😬😢😭😡👍👎👏🙌🙏💪👋🔥❤️💜🎉✨💯✅❌⭐🚀'.matchAll(/\p{Extended_Pictographic}\uFE0F?/gu)].map(m => m[0]);
+function toggleEmoji(btn, ta) {
+  const old = document.querySelector('.emo'); if (old) return old.remove();
+  const box = h('div', { class: 'emo' }, ...EMOJI.map(e => h('button', { onclick: () => { ta.value += e; ta.focus(); } }, e)));
+  btn.closest('.composer').append(box);
+}
+function drawTags() {
+  const bar = document.getElementById('tagbar'), c = S.convs.get(S.cur); if (!bar || !c) return;
+  const save = guard(async tags => { await api(`/conversations/${c.id}/tags`, 'POST', { tags }); api('/tags').then(d => { S.tags = d.tags; }); });
+  const inp = h('input', { placeholder: '+ add tag', list: 'taglist', onkeydown: e => { if (e.key === 'Enter' && inp.value.trim()) { save([...(c.tags || []), inp.value.trim()]); inp.value = ''; } } });
+  bar.replaceChildren(h('span', { class: 'hint', style: 'margin:0' }, 'Tags'), ...(c.tags || []).map(t => h('span', { class: 'tag' }, t, h('button', { title: 'Remove', onclick: () => save(c.tags.filter(x => x !== t)) }, '×'))), inp,
+    h('datalist', { id: 'taglist' }, ...S.tags.map(t => h('option', { value: t.name }))));
 }
 function drawMessages() {
   const box = document.getElementById('msgs'); if (!box) return;
-  const out = []; let prev = null;
+  const out = []; let prev = null, day = '';
   for (const m of S.msgs) {
+    const d = new Date(m.created).toDateString(); if (d !== day) { day = d; out.push(h('div', { class: 'daysep' }, d === new Date().toDateString() ? 'Today' : d)); prev = null; }
     if (m.sender === 'system') { out.push(h('div', { class: 'sysmsg' }, m.body)); prev = null; continue; }
     const key = m.sender + (m.sender_name || '');
     if (key !== prev) out.push(h('div', { class: 'meta' + (m.sender === 'visitor' ? '' : ' r') }, (m.sender === 'visitor' ? vname(S.convs.get(S.cur)?.visitor) : m.sender_name || m.sender) + (m.sender === 'note' ? ' (note)' : '') + ' · ' + new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
@@ -231,8 +285,63 @@ function drawSide() {
 }
 
 // ---------- visitors ----------
+// ---------- contacts ----------
+async function renderContacts(main) {
+  const page = h('div', { class: 'page' }); main.append(page);
+  const box = h('div', { class: 'card', style: 'padding:0' });
+  const load = guard(async q => {
+    const { contacts } = await api('/contacts?q=' + encodeURIComponent(q || ''));
+    box.replaceChildren(contacts.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['Contact', 'Email', 'Chats', 'Visits', 'Last seen'].map(x => h('th', {}, x)))),
+      h('tbody', {}, ...contacts.map(c => h('tr', { style: 'cursor:pointer', onclick: () => openContact(c.id) }, h('td', {}, h('div', { class: 'row' }, avEl(c), h('b', {}, vname(c)), c.online ? h('span', { class: 'pill ok' }, 'online') : null)),
+        h('td', {}, c.email || '—'), h('td', {}, c.conversations), h('td', {}, c.visits), h('td', {}, ago(c.last_seen) + ' ago')))))
+      : h('div', { class: 'empty' }, h('div', { class: 'big' }, '👥'), 'No contacts yet. Visitors appear here once they share a name or email.'));
+  });
+  page.append(h('div', { class: 'row', style: 'margin-bottom:18px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Contacts'),
+    h('input', { placeholder: 'Search name or email…', style: 'width:260px', oninput: debounce(e => load(e.target.value), 250) }),
+    h('a', { class: 'btn sec', href: '/api/export/contacts.csv', style: 'text-decoration:none' }, icon('download', 16), 'Export CSV')), box);
+  load('');
+}
+const openContact = guard(async id => {
+  const { contact: c, conversations } = await api('/contacts/' + id);
+  const f = { name: h('input', { value: c.name || '' }), email: h('input', { type: 'email', value: c.email || '' }), notes: h('textarea', { rows: 4, placeholder: 'Private notes about this contact…' }, c.notes || '') };
+  const d = h('div', { class: 'drawer' }, h('div', { class: 'row' }, avEl(c), h('div', { class: 'grow' }, h('h3', { style: 'margin:0' }, vname(c)), h('div', { class: 'hint', style: 'margin:0' }, `${c.visits} visits · first seen ${new Date(c.created).toLocaleDateString()}`)),
+    h('button', { class: 'btn sec sm', onclick: () => d.remove() }, '✕')),
+    h('label', {}, 'Name'), f.name, h('label', {}, 'Email'), f.email, h('label', {}, 'Notes'), f.notes,
+    h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'btn', onclick: guard(async () => { await api('/contacts/' + id, 'PUT', { name: f.name.value, email: f.email.value, notes: f.notes.value }); toast('Contact saved'); d.remove(); if (S.view === 'contacts') renderShell(); }) }, 'Save'),
+      c.email ? h('a', { class: 'btn sec', href: 'mailto:' + c.email, style: 'text-decoration:none' }, 'Email') : null),
+    h('h4', { style: 'margin:24px 0 8px;font-size:12px;text-transform:uppercase;color:var(--mut)' }, `Conversations (${conversations.length})`),
+    ...conversations.map(cv => h('div', { class: 'check', style: 'cursor:pointer', onclick: () => { d.remove(); S.cur = cv.id; S.view = 'inbox'; S.filter = cv.status === 'open' ? 'open' : 'closed'; renderShell(); } },
+      h('div', { class: 'grow', style: 'flex:1;min-width:0' }, h('b', {}, cv.last_body || '(no messages)'), h('div', { class: 'hint', style: 'margin:0' }, `${cv.status} · ${new Date(cv.updated).toLocaleString()}`)), ...(cv.tags || []).map(t => h('span', { class: 'tag' }, t)))));
+  document.querySelector('.drawer')?.remove(); document.body.append(d);
+});
+
+// ---------- triggers ----------
+async function renderTriggers(main) {
+  const page = h('div', { class: 'page' }); main.append(page);
+  const admin = S.me.role === 'admin', { triggers } = await api('/triggers');
+  page.append(h('div', { class: 'row', style: 'margin-bottom:6px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Triggers'), admin ? h('button', { class: 'btn', onclick: () => triggerEditor(null) }, icon('plus', 16), 'New trigger') : null),
+    h('p', { class: 'hint', style: 'margin:0 0 18px' }, 'Start the conversation for visitors: show a message after a delay on pages whose URL contains some text, or open the chat automatically.'),
+    ...(triggers.length ? triggers.map(t => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, t.name), ' ', h('span', { class: 'pill' + (t.enabled ? ' ok' : '') }, t.enabled ? 'active' : 'paused'), t.open_chat ? h('span', { class: 'pill warn' }, 'auto-opens chat') : null,
+      h('div', { class: 'hint' }, `Page URL ${t.url_contains ? 'contains "' + t.url_contains + '"' : 'any page'} · after ${t.delay}s`), h('div', { style: 'margin-top:6px' }, '💬 ' + t.message)),
+      admin ? [h('button', { class: 'btn sec sm', onclick: () => triggerEditor(t) }, 'Edit'), h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm('Delete trigger?')) { await api('/triggers/' + t.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null)))
+      : [h('div', { class: 'card empty' }, h('div', { class: 'big' }, '⚡'), 'No triggers yet')]));
+}
+function triggerEditor(t) {
+  const f = { name: h('input', { value: t?.name || '', placeholder: 'e.g. Pricing page help' }), url: h('input', { value: t?.url_contains || '', placeholder: '/pricing   (leave empty for every page)' }), delay: h('input', { type: 'number', min: 0, max: 600, value: t?.delay ?? 10 }),
+    message: h('textarea', { rows: 3 }, t?.message || ''), open: h('input', { type: 'checkbox', checked: !!t?.open_chat }), en: h('input', { type: 'checkbox', checked: t ? t.enabled : true }) };
+  const m = h('div', { class: 'modal' }, h('div', { class: 'card', style: 'width:480px;max-width:96vw' }, h('h3', {}, t ? 'Edit trigger' : 'New trigger'),
+    h('label', {}, 'Name'), f.name, h('label', {}, 'Page URL contains'), f.url, h('label', {}, 'Delay (seconds)'), f.delay, h('label', {}, 'Message'), f.message,
+    h('label', { class: 'inline' }, f.open, 'Open the chat window automatically (instead of a bubble)'), h('label', { class: 'inline' }, f.en, 'Active'),
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px' }, h('button', { class: 'btn sec', onclick: () => m.remove() }, 'Cancel'),
+      h('button', { class: 'btn', onclick: guard(async () => {
+        const b = { name: f.name.value, url_contains: f.url.value, delay: +f.delay.value, message: f.message.value, open_chat: f.open.checked, enabled: f.en.checked };
+        await (t ? api('/triggers/' + t.id, 'PUT', b) : api('/triggers', 'POST', b)); m.remove(); renderShell();
+      }) }, 'Save'))));
+  document.body.append(m);
+}
+
 async function renderVisitors(main) {
-  main.append(h('div', { class: 'page' }, h('div', { class: 'row', style: 'margin-bottom:16px' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Live visitors'), h('a', { class: 'btn sec', href: '/api/export/contacts.csv', style: 'text-decoration:none' }, 'Export contacts (CSV)')), h('div', { class: 'card', id: 'vis' })));
+  main.append(h('div', { class: 'page' }, h('div', { class: 'row', style: 'margin-bottom:16px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Live visitors')), h('div', { class: 'card', id: 'vis', style: 'padding:0' })));
   const d = await api('/visitors'); S.visitors = new Map(d.visitors.map(v => [v.id, v])); drawVisitors();
 }
 function drawVisitors() {
@@ -250,17 +359,30 @@ function drawVisitors() {
 // ---------- overview ----------
 async function renderDashboard(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const [s, an] = await Promise.all([api('/stats'), api('/analytics')]);
+  const [s, an, st0, rules, kb, flows] = await Promise.all([api('/stats'), api('/analytics'), api('/settings'), api('/rules'), api('/kb'), api('/flows')]);
   const max = Math.max(1, ...an.days.map(d => d.chats));
-  const st = (n, l) => h('div', { class: 'stat' }, h('b', {}, n), h('span', {}, l));
-  page.append(h('h2', {}, 'Welcome back, ' + S.me.name), h('div', { class: 'grid' }, st(s.open, 'Open conversations'), st(s.needsHuman, 'Waiting for a human'), st(s.unassigned, 'Unassigned'),
-    st(s.visitorsOnline, 'Visitors online'), st(s.today, 'New chats today'), st(s.messagesToday, 'Messages today'), st(s.resolved, 'Resolved total'), st(s.agentsOnline, 'Agents online')),
+  const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
+  const greet = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 18 ? 'Good afternoon' : 'Good evening';
+  const steps = [
+    ['Install the widget on your website', `Paste the snippet in Settings → Install`, an.total > 0 || s.visitorsOnline > 0],
+    ['Receive your first conversation', 'Open the demo site and say hello', an.total > 0],
+    ['Customise the widget', 'Colours, greeting and avatar in Settings → Widget', st0.settings.color !== '#4f46e5' || st0.settings.greeting !== 'Hi there 👋 How can we help you today?'],
+    ['Teach the bot with your FAQ', 'Add knowledge base answers', kb.kb.length > 2],
+    ['Invite a teammate', 'Settings → Team', S.agents.length > 1],
+  ];
+  const done = steps.filter(x => x[2]).length;
+  page.append(h('h2', {}, `${greet}, ${S.me.name} 👋`),
+    h('div', { class: 'grid' }, stat('msg', s.open, 'Open conversations'), stat('alert', s.needsHuman, 'Waiting for a human', s.needsHuman ? 'warn' : ''), stat('inbox', s.unassigned, 'Unassigned'), stat('eye', s.visitorsOnline, 'Visitors online'),
+      stat('zap', s.today, 'New chats today'), stat('send', s.messagesToday, 'Messages today'), stat('check', s.resolved, 'Resolved total', 'ok'), stat('users', s.agentsOnline, 'Agents online')),
+    done < steps.length ? h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Getting started'), h('span', { class: 'hint' }, `${done} of ${steps.length} done`)),
+      h('div', { class: 'progress' }, h('div', { style: `width:${done / steps.length * 100}%` })),
+      ...steps.map(([t, d, ok]) => h('div', { class: 'check' + (ok ? ' done' : '') }, h('div', { class: 'c' }, ok ? icon('check', 14) : null), h('div', {}, h('b', {}, t), h('div', { class: 'hint', style: 'margin:0' }, d))))) : null,
     h('div', { class: 'card' }, h('h3', {}, 'Conversations — last 14 days'),
-      h('div', { style: 'display:flex;align-items:flex-end;gap:6px;height:110px;margin:14px 0 4px' }, ...an.days.map(d => h('div', { title: `${d.date}: ${d.chats} chats, ${d.messages} messages`, style: `flex:1;background:#818cf8;border-radius:4px 4px 0 0;height:${Math.max(3, d.chats / max * 100)}%` }))),
+      h('div', { style: 'display:flex;align-items:flex-end;gap:7px;height:130px;margin:16px 0 4px' }, ...an.days.map(d => h('div', { title: `${d.date}: ${d.chats} chats, ${d.messages} messages`, style: `flex:1;background:linear-gradient(180deg,var(--pri2),var(--pri));border-radius:5px 5px 0 0;opacity:${d.chats ? 1 : .25};height:${Math.max(3, d.chats / max * 100)}%` }))),
       h('div', { class: 'row hint', style: 'justify-content:space-between' }, h('span', {}, an.days[0].date), h('span', {}, an.days[13].date)),
-      h('div', { class: 'grid', style: 'margin:14px 0 0' }, st(an.avgFirstResponseSec == null ? '—' : an.avgFirstResponseSec < 90 ? an.avgFirstResponseSec + 's' : Math.round(an.avgFirstResponseSec / 60) + 'm', 'Avg first response'),
-        st(an.csat == null ? '—' : an.csat + ' / 5', `Satisfaction (${an.ratings} ratings)`), st(an.botHandledPct + '%', 'Handled by bot only'), st(an.contacts, 'Contacts with email'))),
-    h('div', { class: 'card' }, h('h3', {}, 'Get started'), h('p', {}, 'Add the chat widget to your website by pasting this snippet before </body>:'), h('pre', { class: 'code' }, snippet()),
+      h('div', { class: 'grid', style: 'margin:16px 0 0' }, stat('clock', an.avgFirstResponseSec == null ? '—' : an.avgFirstResponseSec < 90 ? an.avgFirstResponseSec + 's' : Math.round(an.avgFirstResponseSec / 60) + 'm', 'Avg first response'),
+        stat('star', an.csat == null ? '—' : an.csat + ' / 5', `Satisfaction (${an.ratings} ratings)`), stat('bot', an.botHandledPct + '%', 'Handled by bot only'), stat('users', an.contacts, 'Contacts with email'))),
+    h('div', { class: 'card' }, h('h3', {}, 'Install on your website'), h('p', { class: 'hint' }, 'Paste this snippet before </body>:'), h('pre', { class: 'code' }, snippet()),
       h('div', { class: 'row' }, h('button', { class: 'btn sec', onclick: () => { navigator.clipboard?.writeText(snippet()); toast('Copied'); } }, 'Copy snippet'), h('a', { href: '/', target: '_blank' }, 'Open demo site ↗'))));
 }
 const snippet = () => `<script src="${location.origin}/widget.js" data-key="${S.siteKey}" async></script>`;
@@ -316,7 +438,7 @@ function flowEditor(f) {
   };
   draw();
   const nm = h('input', { value: st.name, placeholder: 'e.g. Lead capture' }), kw = h('input', { value: st.keywords, placeholder: 'quote, demo, pricing help' }), en = h('input', { type: 'checkbox', checked: st.enabled });
-  const m = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;z-index:5;overflow:auto;padding:30px 10px' },
+  const m = h('div', { class: 'modal' },
     h('div', { class: 'card', style: 'width:640px;max-width:96vw;margin:0' }, h('h3', {}, f ? 'Edit flow' : 'New flow'), h('label', {}, 'Name'), nm, h('label', {}, 'Trigger keywords (comma separated)'), kw,
       h('label', { class: 'inline' }, en, 'Enabled'), h('label', {}, 'Steps (the flow begins at step #1)'), body,
       h('button', { class: 'btn sec sm', style: 'margin-top:10px', onclick: () => { let k = st.nodes.length + 1; while (st.nodes.some(n => n.id === 'n' + k)) k++; st.nodes.push({ id: 'n' + k, type: 'message', text: '', next: '' }); draw(); } }, '+ Add step'), err,
@@ -330,7 +452,7 @@ function flowEditor(f) {
 function ruleEditor(main, r) {
   const f = { name: h('input', { value: r?.name || '' }), keywords: h('input', { value: r?.keywords || '', placeholder: 'price, pricing, cost' }), reply: h('textarea', { rows: 3 }, r?.reply || ''),
     buttons: h('input', { value: (r?.buttons || []).join(', '), placeholder: 'Pricing, Talk to a human' }), handoff: h('input', { type: 'checkbox', checked: !!r?.handoff }), enabled: h('input', { type: 'checkbox', checked: r ? r.enabled : true }) };
-  const m = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:5' },
+  const m = h('div', { class: 'modal' },
     h('div', { class: 'card', style: 'width:480px;max-width:94vw;margin:0' }, h('h3', {}, r ? 'Edit rule' : 'New rule'),
       h('label', {}, 'Name'), f.name, h('label', {}, 'Trigger keywords (comma separated)'), f.keywords, h('label', {}, 'Bot reply'), f.reply,
       h('label', {}, 'Quick-reply buttons (comma separated, optional)'), f.buttons,
@@ -353,25 +475,48 @@ async function renderSettings(main) {
   const admin = S.me.role === 'admin';
   if (settingsTab === 'widget') {
     const { settings: s } = await api('/settings');
-    const inp = (k, label, type = 'text', hint) => [h('label', {}, label), h('input', { id: 's_' + k, type, value: s[k], disabled: !admin }), hint ? h('div', { class: 'hint' }, hint) : null];
-    const chk = (k, label) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 's_' + k, checked: s[k], disabled: !admin }), label);
-    page.append(h('div', { class: 'card' }, ...inp('title', 'Widget title'), ...inp('subtitle', 'Subtitle'), ...inp('brandName', 'Brand name (footer)'), ...inp('color', 'Brand color', 'color'),
-      h('label', {}, 'Position'), h('select', { id: 's_position', disabled: !admin }, h('option', { value: 'right', selected: s.position === 'right' }, 'Bottom right'), h('option', { value: 'left', selected: s.position === 'left' }, 'Bottom left')),
-      ...inp('greeting', 'Welcome message'), ...inp('fallbackMessage', 'Bot fallback message'), ...inp('handoffMessage', 'Handoff message (agents online)'), ...inp('offlineMessage', 'Offline message (no agents online)'),
-      chk('askEmail', 'Ask for email when handing over to a human'), chk('ratingEnabled', 'Ask for a satisfaction rating when a chat is closed'), chk('proactiveEnabled', 'Show proactive greeting bubble'), ...inp('proactiveDelay', 'Proactive delay (seconds)', 'number'), ...inp('proactiveMessage', 'Proactive message'),
-      h('h3', { style: 'margin-top:20px' }, 'Email'), h('div', { class: 'hint' }, S.mailConfigured ? '✓ SMTP is configured on the server.' : 'Set SMTP_URL (e.g. smtp://user:pass@smtp.example.com:587) and SMTP_FROM on the server to enable email.'),
-      chk('emailNotifications', 'Email the team when a visitor needs a human and nobody is online'), chk('emailReplies', 'Email the visitor an agent reply when they have left the site'), chk('emailTranscript', 'Email the visitor a transcript when a chat is closed'),
-      admin && S.mailConfigured ? h('button', { class: 'btn sec sm', style: 'margin-top:8px', onclick: guard(async () => { await api('/mail/test', 'POST', {}); toast('Test email sent to ' + S.me.email); }) }, 'Send test email') : null,
-      h('h3', { style: 'margin-top:20px' }, 'Hours & integrations'),
-      chk('businessHoursEnabled', 'Only show as online during business hours'), ...inp('hoursStart', 'Opens (HH:MM)'), ...inp('hoursEnd', 'Closes (HH:MM)'),
-      ...inp('hoursDays', 'Open days', 'text', 'Comma-separated, 0 = Sunday … 6 = Saturday, e.g. 1,2,3,4,5'), ...inp('timezone', 'Timezone', 'text', 'IANA name, e.g. America/New_York'),
-      ...inp('webhookUrl', 'Webhook URL', 'text', 'Receives JSON POSTs for conversation.created, message.created, visitor.identified, conversation.closed, conversation.rated'),
-      ...inp('allowedOrigins', 'Allowed origins', 'text', 'Use * for any site, or a comma-separated list like https://shop.com,https://www.shop.com'),
-      admin ? h('button', { class: 'btn', style: 'margin-top:16px', onclick: guard(async () => {
-        const g = k => { const e = document.getElementById('s_' + k); return e.type === 'checkbox' ? e.checked : e.value; };
-        await api('/settings', 'PUT', Object.fromEntries(['title', 'subtitle', 'brandName', 'color', 'position', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage', 'askEmail', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins', 'ratingEnabled', 'businessHoursEnabled', 'hoursStart', 'hoursEnd', 'hoursDays', 'timezone', 'webhookUrl', 'emailNotifications', 'emailReplies', 'emailTranscript'].map(k => [k, g(k)])));
-        toast('Saved — reload the site to see changes');
-      }) }, 'Save changes') : h('div', { class: 'hint' }, 'Only admins can change settings.')));
+    const KEYS = ['title', 'subtitle', 'brandName', 'color', 'position', 'gradient', 'launcherStyle', 'launcherLabel', 'avatarUrl', 'theme', 'showBranding', 'prechatForm', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage',
+      'askEmail', 'ratingEnabled', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins', 'businessHoursEnabled', 'hoursStart', 'hoursEnd', 'hoursDays', 'timezone', 'webhookUrl', 'emailNotifications', 'emailReplies', 'emailTranscript'];
+    const g = k => { const e = document.getElementById('s_' + k); return !e ? s[k] : e.type === 'checkbox' ? e.checked : e.value; };
+    const upd = () => drawPreview();
+    const inp = (k, label, type = 'text', hint) => [h('label', {}, label), h('input', { id: 's_' + k, type, value: s[k], disabled: !admin, oninput: upd }), hint ? h('div', { class: 'hint' }, hint) : null];
+    const txt = (k, label) => [h('label', {}, label), h('textarea', { id: 's_' + k, rows: 2, disabled: !admin, oninput: upd }, s[k])];
+    const chk = (k, label) => h('label', { class: 'inline' }, h('input', { type: 'checkbox', id: 's_' + k, checked: s[k], disabled: !admin, onchange: upd }), label);
+    const sel = (k, label, opts) => [h('label', {}, label), h('select', { id: 's_' + k, disabled: !admin, onchange: upd }, ...opts.map(([v, l]) => h('option', { value: v, selected: s[k] === v }, l)))];
+    const preview = h('div', { class: 'preview' });
+    function drawPreview() {
+      const c = /^#[0-9a-f]{6}$/i.test(g('color')) ? g('color') : '#6366f1', dark = g('theme') === 'dark', right = g('position') !== 'left', pill = g('launcherStyle') === 'pill';
+      const av = g('avatarUrl');
+      const head = g('gradient') ? `linear-gradient(135deg,${c},color-mix(in srgb,${c} 65%,#000))` : c;
+      preview.replaceChildren(
+        h('div', { class: 'pv-panel' + (dark ? ' dark' : '') }, h('div', { class: 'pv-head', style: `background:${head}` }, h('div', { class: 'a' }, av ? h('img', { src: av, alt: '' }) : '💬'),
+          h('div', {}, h('b', {}, g('title') || ' '), h('div', { style: 'font-size:12px;opacity:.9' }, '🟢 ' + (g('subtitle') || '')))),
+          h('div', { class: 'pv-body' }, h('div', { class: 'pv-b' }, g('greeting')), h('div', { class: 'pv-v', style: `background:${c}` }, 'What are your prices?'), h('div', { class: 'pv-b' }, 'Our plans start at $19/month.'),
+            h('div', { class: 'row', style: 'gap:6px;margin-top:4px' }, ...['Pricing', 'Talk to a human'].map(x => h('span', { style: `border:1.5px solid ${c};color:${c};border-radius:16px;padding:4px 11px;font-size:12px` }, x)))),
+          g('showBranding') ? h('div', { style: 'text-align:center;font-size:11px;color:#9ca3af;padding:6px;background:inherit' }, '⚡ Powered by ' + (g('brandName') || 'Chatly')) : null),
+        h('div', { style: `align-self:${right ? 'flex-end' : 'flex-start'}`, class: 'pv-launch' }, (() => { const i = icon('msg', 22); i.style.stroke = '#fff'; return i; })(), pill ? g('launcherLabel') : null));
+      preview.lastChild.style.background = c;
+    }
+    const save = guard(async () => {
+      await api('/settings', 'PUT', Object.fromEntries(KEYS.map(k => [k, g(k)]))); toast('Saved — reload your site to see the changes');
+    });
+    page.append(h('div', { class: 'split' }, h('div', {},
+      h('div', { class: 'card' }, h('h3', {}, 'Appearance'), h('div', { class: 'grid2' }, h('div', {}, ...inp('title', 'Title'), ...inp('color', 'Brand colour', 'color')), h('div', {}, ...inp('subtitle', 'Subtitle'), ...sel('position', 'Position', [['right', 'Bottom right'], ['left', 'Bottom left']]))),
+        h('div', { class: 'grid2' }, h('div', {}, ...sel('launcherStyle', 'Launcher', [['circle', 'Round icon'], ['pill', 'Pill with label']])), h('div', {}, ...inp('launcherLabel', 'Launcher label'))),
+        h('div', { class: 'grid2' }, h('div', {}, ...sel('theme', 'Theme', [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Match visitor system']])), h('div', {}, ...inp('avatarUrl', 'Avatar image URL', 'text', 'Shown in the header and next to replies'))),
+        chk('gradient', 'Gradient header'), chk('showBranding', 'Show "Powered by" footer'), ...inp('brandName', 'Brand name (footer)')),
+      h('div', { class: 'card' }, h('h3', {}, 'Messages'), ...txt('greeting', 'Welcome message'), ...txt('fallbackMessage', 'Bot fallback message'), ...txt('handoffMessage', 'Handoff message (agents online)'), ...txt('offlineMessage', 'Offline message (no agents online)')),
+      h('div', { class: 'card' }, h('h3', {}, 'Behaviour'), chk('prechatForm', 'Ask for name and email before the first message (pre-chat form)'), chk('askEmail', 'Ask for email when handing over to a human'), chk('ratingEnabled', 'Ask for a satisfaction rating when a chat is closed'),
+        chk('proactiveEnabled', 'Show proactive greeting bubble'), ...inp('proactiveDelay', 'Proactive delay (seconds)', 'number'), ...inp('proactiveMessage', 'Proactive message')),
+      h('div', { class: 'card' }, h('h3', {}, 'Email'), h('div', { class: 'hint' }, S.mailConfigured ? '✓ SMTP is configured on the server.' : 'Set SMTP_URL (e.g. smtp://user:pass@smtp.example.com:587) and SMTP_FROM on the server to enable email.'),
+        chk('emailNotifications', 'Email the team when a visitor needs a human and nobody is online'), chk('emailReplies', 'Email the visitor an agent reply when they have left the site'), chk('emailTranscript', 'Email the visitor a transcript when a chat is closed'),
+        admin && S.mailConfigured ? h('button', { class: 'btn sec sm', onclick: guard(async () => { await api('/mail/test', 'POST', {}); toast('Test email sent to ' + S.me.email); }) }, 'Send test email') : null),
+      h('div', { class: 'card' }, h('h3', {}, 'Business hours & integrations'), chk('businessHoursEnabled', 'Only show as online during business hours'),
+        h('div', { class: 'grid2' }, h('div', {}, ...inp('hoursStart', 'Opens (HH:MM)'), ...inp('hoursDays', 'Open days', 'text', '0 = Sunday … 6 = Saturday')), h('div', {}, ...inp('hoursEnd', 'Closes (HH:MM)'), ...inp('timezone', 'Timezone', 'text', 'e.g. America/New_York'))),
+        ...inp('webhookUrl', 'Webhook URL', 'text', 'Receives JSON POSTs: conversation.created, message.created, visitor.identified, conversation.closed, conversation.rated'),
+        ...inp('allowedOrigins', 'Allowed origins', 'text', 'Use * for any site, or a comma-separated list like https://shop.com')),
+      admin ? h('button', { class: 'btn', style: 'padding:11px 22px', onclick: save }, 'Save changes') : h('div', { class: 'hint' }, 'Only admins can change settings.')), preview));
+    drawPreview();
   } else if (settingsTab === 'install') {
     page.append(h('div', { class: 'card' }, h('h3', {}, 'Install on your website'), h('p', {}, 'Paste before the closing </body> tag on every page:'), h('pre', { class: 'code' }, snippet()),
       h('button', { class: 'btn sec', onclick: () => { navigator.clipboard?.writeText(snippet()); toast('Copied'); } }, 'Copy'),
