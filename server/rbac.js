@@ -6,6 +6,7 @@ export const PERMISSIONS = {
   'chats.assign': 'Assign conversations to teammates',
   'chats.close': 'Close and reopen conversations',
   'chats.delete': 'Delete conversations permanently',
+  'chats.block': 'Block visitors, report spam and manage spam protection',
   'contacts.view': 'View contacts',
   'contacts.edit': 'Edit contacts and notes',
   'contacts.export': 'Export contacts and transcripts',
@@ -24,8 +25,8 @@ export const ALL = Object.keys(PERMISSIONS);
 export const DEFAULT_ROLES = [
   { name: 'Owner', system: 1, permissions: ALL },
   { name: 'Admin', system: 0, permissions: ALL.filter(p => p !== 'workspace.manage') },
-  { name: 'Supervisor', system: 0, permissions: ['chats.view', 'chats.view_all', 'chats.reply', 'chats.assign', 'chats.close', 'contacts.view', 'contacts.edit', 'contacts.export', 'canned.manage', 'bot.manage', 'analytics.view'] },
-  { name: 'Agent', system: 0, permissions: ['chats.view', 'chats.reply', 'chats.close', 'contacts.view', 'contacts.edit'] },
+  { name: 'Supervisor', system: 0, permissions: ['chats.view', 'chats.view_all', 'chats.reply', 'chats.assign', 'chats.close', 'chats.block', 'contacts.view', 'contacts.edit', 'contacts.export', 'canned.manage', 'bot.manage', 'analytics.view'] },
+  { name: 'Agent', system: 0, permissions: ['chats.view', 'chats.reply', 'chats.close', 'chats.block', 'contacts.view', 'contacts.edit'] },
   { name: 'Viewer', system: 0, permissions: ['chats.view', 'chats.view_all', 'contacts.view', 'analytics.view'] },
 ];
 

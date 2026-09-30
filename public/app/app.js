@@ -4,6 +4,7 @@ const S = { perms: new Set(), sites: [], site: 0, workspaces: [], members: [], c
 let es;
 
 // ---------- utils ----------
+const appendTo = (el, ...kids) => el.append(...kids.flat().filter(k => k != null && k !== false));
 function h(tag, attrs, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -33,7 +34,7 @@ async function api(path, method = 'GET', body) {
 }
 function toast(msg) { const t = h('div', { class: 'toast' }, msg); document.body.append(t); setTimeout(() => t.remove(), 2500); }
 const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
-const vname = v => v?.name || v?.email || 'Visitor ' + (v?.id || '').slice(1, 6);
+const vname = v => v?.name || v?.email || 'Visitor ' + String(v?.id || '').split(':').pop().slice(1, 6);
 const ICONS = {
   logo: '<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.6-.8L3 21l1.9-5.4A8.4 8.4 0 1 1 21 11.5z"/>',
   home: '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -57,6 +58,7 @@ const ICONS = {
   trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
 };
 const icon = (n, size) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', 'i'); if (size) { s.style.width = s.style.height = size + 'px'; } s.innerHTML = ICONS[n] || ''; return s; };
 const HUES = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#0ea5e9', '#14b8a6', '#eab308'];
@@ -76,18 +78,19 @@ function renderLogin(mode = 'login') {
     site: h('input', { placeholder: 'https://yourstore.com (optional)' }),
     email: h('input', { type: 'email', placeholder: 'you@company.com', autocomplete: 'username', required: true }),
     pw: h('input', { type: 'password', placeholder: mode === 'signup' ? 'At least 8 characters' : 'Password', autocomplete: mode === 'signup' ? 'new-password' : 'current-password', required: true }) };
-  const signup = mode === 'signup';
+  const signup = mode === 'signup', t0 = Date.now();
+  const hp = h('input', { name: 'company_website', tabindex: '-1', autocomplete: 'off', 'aria-hidden': 'true', style: 'position:absolute;left:-9999px;width:1px;height:1px;opacity:0' });
   $app.replaceChildren(h('div', { class: 'login-bg' }, h('form', { class: 'login', onsubmit: async e => {
     e.preventDefault(); err.textContent = '';
     try {
-      if (signup) await api('/auth/signup', 'POST', { name: f.name.value, workspace: f.workspace.value, domain: f.site.value, site_name: f.site.value ? f.site.value.replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '', email: f.email.value, password: f.pw.value });
+      if (signup) await api('/auth/signup', 'POST', { name: f.name.value, workspace: f.workspace.value, domain: f.site.value, site_name: f.site.value ? f.site.value.replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '', email: f.email.value, password: f.pw.value, company_website: hp.value, elapsed: Date.now() - t0 });
       else await api('/auth/login', 'POST', { email: f.email.value, password: f.pw.value });
       boot();
     } catch (x) { err.textContent = x.message; }
   } }, h('div', { class: 'logo' }, icon('logo')), h('h1', {}, signup ? 'Create your account' : 'Welcome back'),
     h('div', { class: 'hint' }, signup ? 'Free live chat, chatbot and shared inbox for your website' : 'Sign in to your Chatly dashboard'),
     signup ? [h('label', {}, 'Your name'), f.name, h('label', {}, 'Company / workspace'), f.workspace, h('label', {}, 'Website'), f.site] : null,
-    h('label', {}, 'Email'), f.email, h('label', {}, 'Password'), f.pw, err,
+    h('label', {}, 'Email'), f.email, h('label', {}, 'Password'), f.pw, signup ? hp : null, err,
     h('button', { class: 'btn', style: 'width:100%;margin-top:18px;justify-content:center;padding:11px' }, signup ? 'Create account' : 'Sign in'),
     h('div', { class: 'hint', style: 'text-align:center;margin-top:14px' }, signup ? 'Already have an account? ' : 'New to Chatly? ',
       h('a', { href: '#', onclick: e => { e.preventDefault(); renderLogin(signup ? 'login' : 'signup'); } }, signup ? 'Sign in' : 'Create an account')))));
@@ -110,7 +113,8 @@ async function boot() {
   if (!d?.user) return;
   S.me = d.user; S.role = d.role; S.workspace = d.workspace; S.workspaces = d.workspaces; S.perms = new Set(d.permissions); S.sites = d.sites; S.catalog = d.catalog;
   S.aiConfigured = d.aiConfigured; S.mailConfigured = d.mailConfigured;
-  if (!S.workspace) return renderNoWorkspace();
+  S.announcement = d.announcement;
+  if (!S.workspace) return S.me.platform_role === 'superadmin' ? (S.view = 'platform', renderShell()) : renderNoWorkspace();
   if (S.site && !S.sites.some(x => x.id === S.site)) S.site = 0;
   S.convs = new Map(); S.cur = null;
   if (!S.me) return;
@@ -123,23 +127,27 @@ function totalUnread() { let n = 0; for (const c of S.convs.values()) if (c.stat
 function renderShell() {
   const link = (v, ic, label) => h('a', { 'data-v': v, class: S.view === v ? 'on' : '', onclick: () => { S.view = v; renderShell(); } }, icon(ic), h('span', { class: 'lbl' }, label),
     v === 'inbox' && totalUnread() ? h('span', { class: 'cnt' }, totalUnread()) : null);
-  const views = { inbox: renderInbox, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
+  const views = { platform: renderPlatform, inbox: renderInbox, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
   const main = h('div', { class: 'main', id: 'main' });
+  const banner = S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null;
   const dark = document.documentElement.dataset.theme === 'dark';
   $app.replaceChildren(h('div', { class: 'shell' },
     h('div', { class: 'nav' }, h('div', { class: 'brand' }, h('div', { class: 'lg' }, icon('logo')), h('span', {}, 'Chatly')),
       h('div', { class: 'switch' },
-        h('select', { title: 'Workspace', onchange: e => switchWorkspace(e.target.value) }, ...S.workspaces.map(w => h('option', { value: w.id, selected: w.id === S.workspace.id }, w.name)), h('option', { value: 'new' }, '+ New workspace…')),
+        h('select', { title: 'Workspace', onchange: e => switchWorkspace(e.target.value) }, ...S.workspaces.map(w => h('option', { value: w.id, selected: w.id === S.workspace?.id }, w.name)), h('option', { value: 'new' }, '+ New workspace…')),
         S.sites.length > 1 ? h('select', { title: 'Website', onchange: e => { S.site = +e.target.value; S.convs = new Map(); S.cur = null; renderShell(); } },
           h('option', { value: 0 }, 'All websites'), ...S.sites.map(x => h('option', { value: x.id, selected: x.id === S.site }, x.name))) : null),
-      can('chats.view') ? [link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox')] : null,
+      S.workspace && can('chats.view') ? [link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox')] : null,
       can('contacts.view') || can('chats.view') ? h('div', { class: 'sec' }, 'People') : null, can('contacts.view') ? link('contacts', 'users', 'Contacts') : null, can('chats.view') ? link('visitors', 'eye', 'Live visitors') : null,
       can('bot.manage') ? [h('div', { class: 'sec' }, 'Automation'), link('bot', 'bot', 'Chatbot & flows'), link('triggers', 'zap', 'Triggers')] : null,
-      h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings'),
+      S.workspace ? [h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings')] : null,
+      S.me.platform_role === 'superadmin' ? [h('div', { class: 'sec' }, 'Platform'), link('platform', 'shield', 'Platform console')] : null,
       h('a', { onclick: () => { setTheme(dark ? 'light' : 'dark'); renderShell(); } }, icon(dark ? 'sun' : 'moon'), h('span', { class: 'lbl' }, dark ? 'Light mode' : 'Dark mode')),
       h('div', { class: 'me' }, avEl({ id: S.me.email, name: S.me.name }), h('div', {}, h('b', {}, S.me.name), h('small', {}, S.role.name)),
         h('button', { title: 'Sign out', onclick: async () => { await api('/auth/logout', 'POST'); S.me = null; renderLogin(); } }, icon('logout')))),
-    main));
+    h('div', { class: 'mainwrap' }, banner, main)));
+  if (!S.workspace && S.view !== 'platform') S.view = 'platform';
+  if (S.workspace?.suspended && S.view !== 'platform') { main.append(h('div', { class: 'page' }, h('div', { class: 'card empty' }, h('div', { class: 'big' }, '⛔'), h('h3', {}, 'This workspace is suspended'), h('p', {}, S.workspace.suspended), h('p', { class: 'hint' }, 'Contact support to restore access. You can still switch to another workspace from the sidebar.')))); return; }
   if (!can('chats.view') && ['dashboard', 'inbox', 'visitors'].includes(S.view)) S.view = can('contacts.view') ? 'contacts' : 'settings';
   (views[S.view] || renderSettings)(main);
 }
@@ -234,7 +242,7 @@ function drawList() {
   box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : '') + (c.unread ? ' unr' : ''), onclick: () => openConv(c.id) },
     avEl(c.visitor, c.visitor.online ? h('span', { class: 'on-dot' }) : null),
     h('div', { style: 'min-width:0;flex:1' },
-      h('div', { class: 'nm' }, vname(c.visitor), c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
+      h('div', { class: 'nm' }, vname(c.visitor), c.spam ? h('span', { class: 'pill bad' }, 'spam') : c.spam_score >= 40 ? h('span', { class: 'pill warn', title: `Spam score ${c.spam_score}` }, '⚠ spam?') : null, c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
       h('div', { class: 'lb' }, c.last_body || '…'), S.sites.length > 1 && !S.site ? h('div', { class: 'hint', style: 'margin:1px 0 0;font-size:11.5px' }, '🌐 ' + (c.site_name || '')) : null,
       h('div', { class: 'row', style: 'gap:5px;margin-top:3px;flex-wrap:wrap' }, ...(c.tags || []).slice(0, 3).map(t => h('span', { class: 'tag' }, t)), c.assignee_name ? h('span', { class: 'hint', style: 'margin:0' }, '→ ' + c.assignee_name) : null)))) : [h('div', { class: 'empty' }, h('div', { class: 'big' }, '🎉'), 'No conversations here')]));
 }
@@ -289,6 +297,7 @@ function drawHead() {
   hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1' }, h('b', {}, vname(c.visitor)),
     h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '')), assign,
     can('chats.close') ? h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen') : null,
+    can('chats.block') ? h('button', { class: 'btn sec', title: 'Block visitor or report spam', onclick: () => blockDialog(c) }, '🚫') : null,
     h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, icon('download')),
     can('chats.delete') ? h('button', { class: 'btn danger', title: 'Delete conversation', onclick: guard(async () => { if (confirm('Delete this conversation permanently?')) await api('/conversations/' + c.id, 'DELETE'); }) }, icon('trash')) : null);
 }
@@ -297,6 +306,17 @@ function toggleEmoji(btn, ta) {
   const old = document.querySelector('.emo'); if (old) return old.remove();
   const box = h('div', { class: 'emo' }, ...EMOJI.map(e => h('button', { onclick: () => { ta.value += e; ta.focus(); } }, e)));
   btn.closest('.composer').append(box);
+}
+function blockDialog(c) {
+  const ip = h('input', { type: 'checkbox' }), rep = h('input', { type: 'checkbox', checked: c.spam_score >= 40 }), why = h('input', { placeholder: 'Reason (optional)' });
+  const md = h('div', { class: 'modal' }, h('div', { class: 'card', style: 'width:440px;max-width:96vw' }, h('h3', {}, 'Block ' + vname(c.visitor)),
+    h('p', { class: 'hint' }, 'Blocked visitors no longer see the chat widget on your websites. You can unblock them in Settings → Spam protection.'),
+    c.spam_score ? h('div', { class: 'note warn' }, `Automatic spam score for this chat: ${c.spam_score}`) : null,
+    h('label', { class: 'inline' }, rep, 'Report as spam (closes the chat and helps the platform catch spam campaigns)'), h('label', { class: 'inline' }, ip, 'Also block their IP address (affects everyone on that network)'),
+    h('label', {}, 'Reason'), why,
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:16px' }, h('button', { class: 'btn sec', onclick: () => md.remove() }, 'Cancel'),
+      h('button', { class: 'btn danger', onclick: guard(async () => { await api(`/conversations/${c.id}/block`, 'POST', { report: rep.checked, ip: ip.checked, reason: why.value }); md.remove(); toast('Visitor blocked'); }) }, 'Block visitor'))));
+  document.body.append(md);
 }
 function drawTags() {
   const bar = document.getElementById('tagbar'), c = S.convs.get(S.cur); if (!bar || !c) return;
@@ -335,6 +355,134 @@ function drawSide() {
 }
 
 // ---------- visitors ----------
+// ---------- platform console (super admins) ----------
+let platformTab = 'overview';
+async function renderPlatform(main) {
+  const page = h('div', { class: 'page' }); main.append(page);
+  const TABS = [['overview', 'Overview'], ['fraud', 'Fraud & abuse'], ['workspaces', 'Workspaces'], ['users', 'Users'], ['settings', 'Platform settings'], ['audit', 'Platform audit']];
+  appendTo(page, h('h2', {}, '🛡 Platform console'), h('p', { class: 'hint', style: 'margin:-10px 0 16px' }, 'Every workspace on this Chatly server. Only platform admins can see this.'),
+    h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: platformTab === k ? 'on' : '', onclick: () => { platformTab = k; renderShell(); } }, l))));
+  const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
+  const when = t => t ? new Date(t).toLocaleString() : '—';
+  if (platformTab === 'overview') {
+    const o = await api('/platform/overview'); const max = Math.max(1, ...o.signups.map(d => d.workspaces));
+    appendTo(page, h('div', { class: 'grid' }, stat('home', o.workspaces, 'Workspaces'), stat('users', o.users, 'Users'), stat('eye', `${o.installed}/${o.sites}`, 'Websites with widget installed'),
+      stat('zap', o.activeWorkspaces7d, 'Active workspaces (7 days)', 'ok'), stat('msg', o.conversationsToday, 'Conversations today'), stat('send', o.messagesToday, 'Messages today'),
+      stat('eye', o.visitorsOnline, 'Visitors online now'), stat('users', o.agentsOnline, 'Agents online now'), stat('alert', o.suspended, 'Suspended workspaces', o.suspended ? 'warn' : '')),
+      h('div', { class: 'card' }, h('h3', {}, 'New workspaces — last 14 days'),
+        h('div', { style: 'display:flex;align-items:flex-end;gap:7px;height:110px;margin:14px 0 4px' }, ...o.signups.map(d => h('div', { title: `${d.date}: ${d.workspaces} workspaces, ${d.users} users`, style: `flex:1;background:linear-gradient(180deg,var(--pri2),var(--pri));border-radius:5px 5px 0 0;opacity:${d.workspaces ? 1 : .25};height:${Math.max(3, d.workspaces / max * 100)}%` }))),
+        h('div', { class: 'row hint', style: 'justify-content:space-between' }, h('span', {}, o.signups[0].date), h('span', {}, o.signups[13].date))),
+      h('div', { class: 'grid2' }, h('div', { class: 'card' }, h('h3', {}, 'Plans'), ...o.plans.map(pl => h('div', { class: 'check' }, h('b', { class: 'grow', style: 'flex:1' }, pl.plan), h('span', {}, pl.n)))),
+        h('div', { class: 'card' }, h('h3', {}, 'Busiest workspaces (30 days)'), ...(o.top.length ? o.top.map(t => h('div', { class: 'check' }, h('b', { style: 'flex:1' }, t.name), h('span', {}, t.conversations + ' chats'))) : [h('p', { class: 'hint' }, 'No conversations yet')]))),
+      h('div', { class: 'card' }, h('h3', {}, 'Server'), h('p', { class: 'hint' }, `Email (SMTP): ${o.mail ? '✅ configured' : '— not configured'} · AI answers: ${o.ai ? '✅ configured' : '— not configured'}`)));
+  } else if (platformTab === 'workspaces') {
+    const { settings } = await api('/platform/settings'); const plans = settings.plans.split(',');
+    const box = h('div', { class: 'card', style: 'padding:0' }); let q = '', filter = '';
+    const load = guard(async () => {
+      const { workspaces } = await api(`/platform/workspaces?q=${encodeURIComponent(q)}&filter=${filter}`);
+      box.replaceChildren(h('table', {}, h('thead', {}, h('tr', {}, ...['Workspace', 'Owner', 'Plan', 'Websites', 'Team', 'Chats', 'Last activity', 'Status'].map(x => h('th', {}, x)))),
+        h('tbody', {}, ...workspaces.map(w => h('tr', { style: 'cursor:pointer', onclick: () => openWorkspace(w.id, plans, load) }, h('td', {}, h('b', {}, w.name), h('div', { class: 'hint', style: 'margin:0' }, '#' + w.id + ' · ' + new Date(w.created).toLocaleDateString())),
+          h('td', {}, w.owner?.email || '—'), h('td', {}, h('span', { class: 'tag' }, w.plan)), h('td', {}, w.sites), h('td', {}, w.members), h('td', {}, w.conversations), h('td', {}, w.last_activity ? ago(w.last_activity) + ' ago' : '—'),
+          h('td', {}, w.suspended ? h('span', { class: 'pill bad' }, 'suspended') : w.agents_online ? h('span', { class: 'pill ok' }, 'online') : h('span', { class: 'pill' }, 'active')))))));
+    });
+    appendTo(page, h('div', { class: 'row', style: 'margin-bottom:14px' }, h('input', { placeholder: 'Search name, owner email or domain…', style: 'max-width:340px', oninput: debounce(e => { q = e.target.value; load(); }, 250) }),
+      h('select', { style: 'width:auto', onchange: e => { filter = e.target.value; load(); } }, h('option', { value: '' }, 'All workspaces'), h('option', { value: 'suspended' }, 'Suspended'), ...plans.map(pl => h('option', { value: 'plan:' + pl }, 'Plan: ' + pl)))), box);
+    load();
+  } else if (platformTab === 'users') {
+    const box = h('div', { class: 'card', style: 'padding:0' }); let q = '';
+    const load = guard(async () => {
+      const { users } = await api('/platform/users?q=' + encodeURIComponent(q));
+      box.replaceChildren(h('table', {}, h('thead', {}, h('tr', {}, ...['User', 'Workspaces', 'Joined', 'Last sign-in', 'Status', ''].map(x => h('th', {}, x)))),
+        h('tbody', {}, ...users.map(u => h('tr', {}, h('td', {}, h('div', { class: 'row' }, avEl({ id: u.email, name: u.name }), h('div', {}, h('b', {}, u.name, u.platform_role ? ' 🛡' : ''), h('div', { class: 'hint', style: 'margin:0' }, u.email)))),
+          h('td', {}, u.memberships.map(m => `${m.name} (${m.role})`).join(', ') || '—'), h('td', {}, new Date(u.created).toLocaleDateString()), h('td', {}, u.last_login ? ago(u.last_login) + ' ago' : 'never'),
+          h('td', {}, u.disabled ? h('span', { class: 'pill bad' }, 'disabled') : u.online ? h('span', { class: 'pill ok' }, 'online') : h('span', { class: 'pill' }, 'active')),
+          h('td', { style: 'text-align:right;white-space:nowrap' }, u.id === S.me.id ? h('span', { class: 'hint' }, 'you') : [
+            h('button', { class: 'btn sec sm', onclick: guard(async () => { await api('/platform/users/' + u.id, 'PUT', { disabled: !u.disabled }); toast(u.disabled ? 'Account enabled' : 'Account disabled and signed out'); load(); }) }, u.disabled ? 'Enable' : 'Disable'), ' ',
+            h('button', { class: 'btn sec sm', onclick: guard(async () => { if (!confirm(`Reset ${u.email}'s password? They will be signed out.`)) return; const r = await api(`/platform/users/${u.id}/reset-password`, 'POST'); r.emailed ? toast('Temporary password emailed') : prompt('Temporary password (share it securely):', r.temporaryPassword); }) }, 'Reset password'), ' ',
+            h('button', { class: 'btn sec sm', onclick: guard(async () => { if (!confirm(u.platform_role ? `Remove platform admin from ${u.email}?` : `Make ${u.email} a platform admin? They will see every workspace.`)) return; await api('/platform/users/' + u.id, 'PUT', { platform_role: u.platform_role ? null : 'superadmin' }); load(); }) }, u.platform_role ? 'Revoke admin' : 'Make admin')]))))));
+    });
+    appendTo(page, h('input', { placeholder: 'Search name or email…', style: 'max-width:340px;margin-bottom:14px', oninput: debounce(e => { q = e.target.value; load(); }, 250) }), box); load();
+  } else if (platformTab === 'settings') {
+    const { settings: st, signupForcedOff } = await api('/platform/settings');
+    const su = h('input', { type: 'checkbox', checked: st.allowSignup, disabled: signupForcedOff }), an = h('input', { value: st.announcement, placeholder: 'Shown at the top of every dashboard, e.g. planned maintenance' }), pl = h('input', { value: st.plans });
+    appendTo(page, h('div', { class: 'card', style: 'max-width:640px' }, h('label', { class: 'inline' }, su, 'Allow new businesses to sign up'), signupForcedOff ? h('div', { class: 'hint' }, 'Forced off by the ALLOW_SIGNUP=0 environment variable.') : null,
+      h('label', {}, 'Announcement banner'), an, h('label', {}, 'Plans (comma separated)'), pl, h('div', { class: 'hint' }, 'Labels you can assign to workspaces. Billing is not connected yet.'),
+      h('button', { class: 'btn', style: 'margin-top:14px', onclick: guard(async () => { await api('/platform/settings', 'PUT', { allowSignup: su.checked, announcement: an.value, plans: pl.value }); toast('Saved'); await boot(); }) }, 'Save')));
+  } else if (platformTab === 'audit') {
+    const { entries } = await api('/platform/audit');
+    appendTo(page, h('div', { class: 'card', style: 'padding:0' }, entries.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Admin', 'Action', 'Details'].map(x => h('th', {}, x)))),
+      h('tbody', {}, ...entries.map(e => h('tr', {}, h('td', { style: 'white-space:nowrap' }, when(e.created)), h('td', {}, e.user_name), h('td', {}, h('span', { class: 'tag' }, e.action)), h('td', {}, e.detail || '')))))
+      : h('div', { class: 'empty' }, 'No platform actions yet')));
+  } else if (platformTab === 'fraud') await renderFraud(page);
+}
+const actionPill = a => h('span', { class: 'pill ' + ({ blocked: 'bad', reported: 'bad', flagged: 'warn', would_block: 'warn' }[a] || '') }, { would_block: 'would block', reported: 'reported' }[a] || a);
+const KIND = { signup: 'Sign-up', login: 'Sign-in', visitor_message: 'Visitor message', agent_message: 'Agent message', workspace: 'Workspace' };
+async function renderFraud(page) {
+  const ov = await api('/platform/fraud/overview'); const st = ov.settings;
+  const cnt = (kind, action) => ov.byKind.filter(r => (!kind || r.kind === kind) && (!action || r.action === action)).reduce((a, r) => a + r.n, 0);
+  const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
+  appendTo(page, h('div', { class: 'grid' }, stat('alert', ov.open, 'Waiting for review', ov.open ? 'warn' : ''), stat('shield', ov.blocked24h, 'Blocked in 24h'), stat('users', cnt('signup'), 'Risky sign-ups (24h)'),
+    stat('clock', cnt('login'), 'Sign-in attacks (24h)'), stat('msg', cnt('visitor_message'), 'Spam messages (24h)'), stat('send', cnt('agent_message'), 'Phishing attempts (24h)'), stat('users', ov.lockedAccounts, 'Accounts locked now'), stat('shield', ov.blocklist, 'Platform blocklist')),
+    st.fraudMode === 'monitor' ? h('div', { class: 'note warn' }, '👁 Monitor mode: risky actions are logged but nothing is blocked. Switch to Enforce below.') : null);
+  // review queue
+  const queue = h('div'); let qStatus = 'open', qKind = '';
+  const loadQueue = guard(async () => {
+    const { events } = await api(`/platform/fraud/events?status=${qStatus}${qKind ? '&kind=' + qKind : ''}`);
+    queue.replaceChildren(...(events.length ? events.map(e => {
+      const acts = { block_ip: e.ip && h('input', { type: 'checkbox' }), block_email: (e.email || e.user_email) && e.kind !== 'visitor_message' && h('input', { type: 'checkbox' }), block_domain: (e.email || e.user_email) && e.kind === 'signup' && h('input', { type: 'checkbox' }),
+        block_visitor: e.visitor_id && h('input', { type: 'checkbox', checked: true }), disable_user: e.user_id && h('input', { type: 'checkbox', checked: e.kind === 'signup' }), suspend_workspace: e.workspace_id && e.kind !== 'visitor_message' && h('input', { type: 'checkbox' }) };
+      const LB = { block_ip: `Block IP ${e.ip}`, block_email: 'Block email', block_domain: `Block domain ${(e.email || e.user_email || '').split('@')[1]}`, block_visitor: 'Block visitor everywhere', disable_user: `Disable ${e.user_email || 'user'}`, suspend_workspace: `Suspend ${e.workspace_name || 'workspace'}` };
+      const decide = d => guard(async () => { const actions = Object.fromEntries(Object.entries(acts).filter(([, el]) => el).map(([k, el]) => [k, el.checked])); const r = await api('/platform/fraud/events/' + e.id, 'POST', { decision: d, actions }); toast(d === 'confirm' ? 'Confirmed' + (r.done.length ? ': ' + r.done.join(', ') : '') : 'Dismissed'); loadQueue(); });
+      return h('div', { class: 'card fraud' + (e.score >= st.blockThreshold ? ' high' : '') }, h('div', { class: 'row' }, h('div', { class: 'score' }, e.score), h('div', { class: 'grow' },
+        h('b', {}, KIND[e.kind] || e.kind), ' ', actionPill(e.action), e.status !== 'open' ? h('span', { class: 'pill' }, e.status) : null,
+        h('div', { class: 'hint', style: 'margin:2px 0 0' }, [new Date(e.created).toLocaleString(), e.workspace_name && '🏢 ' + e.workspace_name, (e.user_email || e.email) && '✉ ' + (e.user_email || e.email), e.ip && '🌐 ' + e.ip].filter(Boolean).join(' · '))),
+      ), e.summary ? h('div', { class: 'quote' }, e.summary) : null,
+        h('ul', { class: 'signals' }, ...e.signals.map(x => h('li', {}, h('b', {}, '+' + x.weight), ' ', x.detail, h('span', { class: 'hint' }, ' ' + x.code)))),
+        e.status === 'open' ? h('div', { class: 'row', style: 'flex-wrap:wrap;gap:14px;margin-top:10px' }, ...Object.entries(acts).filter(([, el]) => el).map(([k, el]) => h('label', { class: 'inline', style: 'margin:0' }, el, LB[k])),
+          h('span', { class: 'grow' }), h('button', { class: 'btn sec sm', onclick: decide('dismiss') }, 'Dismiss (not fraud)'), h('button', { class: 'btn danger sm', onclick: decide('confirm') }, 'Confirm fraud & apply')) : h('div', { class: 'hint' }, `Reviewed by ${e.reviewed_by || '—'}`));
+    }) : [h('div', { class: 'card empty' }, h('div', { class: 'big' }, '✅'), qStatus === 'open' ? 'Nothing waiting for review' : 'No events')]));
+  });
+  appendTo(page, h('div', { class: 'row', style: 'margin:8px 0 12px' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Review queue'),
+    h('select', { style: 'width:auto', onchange: e => { qKind = e.target.value; loadQueue(); } }, h('option', { value: '' }, 'All types'), ...Object.entries(KIND).map(([k, l]) => h('option', { value: k }, l))),
+    h('select', { style: 'width:auto', onchange: e => { qStatus = e.target.value; loadQueue(); } }, ...[['open', 'Open'], ['confirmed', 'Confirmed'], ['dismissed', 'Dismissed'], ['all', 'All']].map(([v, l]) => h('option', { value: v }, l)))), queue);
+  loadQueue();
+  // risky workspaces
+  appendTo(page, h('div', { class: 'card', style: 'margin-top:18px' }, h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Riskiest workspaces'), h('button', { class: 'btn sec sm', onclick: guard(async () => { const r = await api('/platform/fraud/rescan', 'POST'); toast(`Re-scored ${r.scanned} workspaces`); renderShell(); }) }, 'Re-scan')),
+    ov.risky.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['Workspace', 'Owner', 'Risk', 'Plan', 'Status'].map(x => h('th', {}, x)))), h('tbody', {}, ...ov.risky.map(w => h('tr', { style: 'cursor:pointer', onclick: async () => openWorkspace(w.id, (await api('/platform/settings')).settings.plans.split(','), () => renderShell()) },
+      h('td', {}, h('b', {}, w.name)), h('td', {}, w.owner?.email || '—'), h('td', {}, h('div', { class: 'riskbar' }, h('div', { style: `width:${Math.min(100, w.risk_score / st.autoSuspendThreshold * 100)}%` })), ' ', w.risk_score), h('td', {}, w.plan), h('td', {}, w.suspended ? h('span', { class: 'pill bad' }, 'suspended') : 'active')))))
+      : h('p', { class: 'hint' }, 'No risky workspaces 🎉')));
+  // blocklist
+  const { blocks } = await api('/platform/fraud/blocklist');
+  const bt = h('select', { style: 'width:auto' }, ...[['ip', 'IP address'], ['email', 'Email'], ['email_domain', 'Email domain'], ['keyword', 'Spam word (all sites)'], ['visitor', 'Visitor ID']].map(([v, l]) => h('option', { value: v }, l)));
+  const bv = h('input', { placeholder: 'value' }), bh = h('input', { type: 'number', placeholder: 'hours (empty = forever)', style: 'width:190px' }), ue = h('input', { placeholder: 'email of a locked account' });
+  appendTo(page, h('div', { class: 'card' }, h('h3', {}, 'Platform blocklist'), h('p', { class: 'hint' }, 'Applies to every workspace: sign-ups, sign-ins and chat widgets.'),
+    h('div', { class: 'row', style: 'margin:10px 0' }, bt, h('div', { class: 'grow' }, bv), bh, h('button', { class: 'btn', onclick: guard(async () => { await api('/platform/fraud/blocklist', 'POST', { type: bt.value, value: bv.value, hours: bh.value ? +bh.value : null }); toast('Added'); renderShell(); }) }, 'Add')),
+    blocks.length ? h('table', {}, h('tbody', {}, ...blocks.map(b => h('tr', {}, h('td', {}, h('span', { class: 'tag' }, b.type)), h('td', {}, h('code', {}, b.value)), h('td', { class: 'hint' }, `${b.reason || ''} · ${b.created_by} · ${new Date(b.created).toLocaleDateString()}${b.expires ? ' · until ' + new Date(b.expires).toLocaleString() : ''}`),
+      h('td', { style: 'text-align:right' }, h('button', { class: 'btn sec sm', onclick: guard(async () => { await api('/platform/fraud/blocklist/' + b.id, 'DELETE'); renderShell(); }) }, 'Remove')))))) : h('p', { class: 'hint' }, 'Empty'),
+    h('div', { class: 'row', style: 'margin-top:14px' }, h('div', { class: 'grow' }, ue), h('button', { class: 'btn sec', onclick: guard(async () => { await api('/platform/fraud/unlock', 'POST', { email: ue.value }); toast('Account unlocked'); }) }, 'Unlock account'))));
+  // settings
+  const mode = h('select', {}, h('option', { value: 'enforce', selected: st.fraudMode === 'enforce' }, 'Enforce — block high-risk actions'), h('option', { value: 'monitor', selected: st.fraudMode === 'monitor' }, 'Monitor — log only, never block'));
+  const rt = h('input', { type: 'number', value: st.reviewThreshold }), btr = h('input', { type: 'number', value: st.blockThreshold }), as = h('input', { type: 'checkbox', checked: st.autoSuspend }), ast = h('input', { type: 'number', value: st.autoSuspendThreshold });
+  appendTo(page, h('div', { class: 'card', style: 'max-width:680px' }, h('h3', {}, 'Detection settings'), h('label', {}, 'Mode'), mode,
+    h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Review threshold'), rt, h('div', { class: 'hint' }, 'Score at which an action goes to the review queue')), h('div', {}, h('label', {}, 'Block threshold'), btr, h('div', { class: 'hint' }, 'Score at which an action is blocked'))),
+    h('label', { class: 'inline', style: 'margin-top:14px' }, as, 'Automatically suspend workspaces whose 7-day risk exceeds'), ast,
+    h('button', { class: 'btn', style: 'margin-top:14px', onclick: guard(async () => { await api('/platform/fraud/settings', 'PUT', { fraudMode: mode.value, reviewThreshold: +rt.value, blockThreshold: +btr.value, autoSuspend: as.checked, autoSuspendThreshold: +ast.value }); toast('Saved'); renderShell(); }) }, 'Save settings')));
+}
+const openWorkspace = guard(async (id, plans, reload) => {
+  const { workspace: w, members, sites, audit: log } = await api('/platform/workspaces/' + id);
+  const d = h('div', { class: 'drawer' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('h3', { style: 'margin:0' }, w.name), h('div', { class: 'hint', style: 'margin:0' }, `#${w.id} · created ${new Date(w.created).toLocaleDateString()} · owner ${w.owner?.email || '—'}`)), h('button', { class: 'btn sec sm', onclick: () => d.remove() }, '✕')),
+    w.suspended ? h('div', { class: 'note bad' }, '⛔ Suspended: ' + w.suspended_reason) : null,
+    h('label', {}, 'Plan'), h('select', { onchange: guard(async e => { await api('/platform/workspaces/' + id, 'PUT', { plan: e.target.value }); toast('Plan updated'); reload(); }) }, ...plans.map(pl => h('option', { value: pl, selected: pl === w.plan }, pl))),
+    h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' },
+      w.suspended ? h('button', { class: 'btn', onclick: guard(async () => { await api('/platform/workspaces/' + id, 'PUT', { suspended: false }); toast('Reactivated'); d.remove(); reload(); }) }, 'Reactivate')
+        : h('button', { class: 'btn danger', onclick: guard(async () => { const reason = prompt('Reason shown to the workspace (e.g. unpaid invoice, abuse):'); if (reason == null) return; await api('/platform/workspaces/' + id, 'PUT', { suspended: true, reason }); toast('Suspended — dashboard, widget and live chats are blocked'); d.remove(); reload(); }) }, 'Suspend'),
+      h('button', { class: 'btn danger', onclick: guard(async () => { const c = prompt(`Permanently delete "${w.name}" and ALL its data? Type the workspace name to confirm.`); if (c == null) return; await api('/platform/workspaces/' + id, 'DELETE', { confirm: c }); toast('Workspace deleted'); d.remove(); reload(); }) }, 'Delete…')),
+    h('h4', { class: 'dh' }, `Websites (${sites.length})`), ...sites.map(s => h('div', { class: 'check' }, h('div', { style: 'flex:1' }, h('b', {}, s.name), h('div', { class: 'hint', style: 'margin:0' }, (s.domain || 'no domain') + ' · ' + (s.last_seen_at ? `widget seen ${ago(s.last_seen_at)} ago on ${s.last_origin}` : 'widget not detected'))), h('span', {}, s.conversations + ' chats'))),
+    h('h4', { class: 'dh' }, `Team (${members.length})`), ...members.map(u => h('div', { class: 'check' }, avEl({ id: u.email, name: u.name }), h('div', { style: 'flex:1' }, h('b', {}, u.name, u.disabled ? ' (disabled)' : ''), h('div', { class: 'hint', style: 'margin:0' }, u.email)), h('span', { class: 'tag' }, u.role))),
+    h('h4', { class: 'dh' }, 'Recent activity'), ...(log.length ? log.map(e => h('div', { class: 'hint', style: 'margin:6px 0' }, `${new Date(e.created).toLocaleString()} · ${e.user_name} · ${e.action}${e.detail ? ' · ' + e.detail : ''}`)) : [h('p', { class: 'hint' }, 'Nothing yet')]));
+  document.querySelector('.drawer')?.remove(); document.body.append(d);
+});
+
 // ---------- contacts ----------
 async function renderContacts(main) {
   const page = h('div', { class: 'page' }); main.append(page);
@@ -346,7 +494,7 @@ async function renderContacts(main) {
         h('td', {}, c.email || '—'), h('td', {}, c.conversations), h('td', {}, c.visits), h('td', {}, ago(c.last_seen) + ' ago')))))
       : h('div', { class: 'empty' }, h('div', { class: 'big' }, '👥'), 'No contacts yet. Visitors appear here once they share a name or email.'));
   });
-  page.append(h('div', { class: 'row', style: 'margin-bottom:18px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Contacts'),
+  appendTo(page, h('div', { class: 'row', style: 'margin-bottom:18px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Contacts'),
     h('input', { placeholder: 'Search name or email…', style: 'width:260px', oninput: debounce(e => load(e.target.value), 250) }),
     h('a', { class: 'btn sec', href: '/api/export/contacts.csv', style: 'text-decoration:none' }, icon('download', 16), 'Export CSV')), box);
   load('');
@@ -369,7 +517,7 @@ const openContact = guard(async id => {
 async function renderTriggers(main) {
   const page = h('div', { class: 'page' }); main.append(page);
   const admin = can('bot.manage'), { triggers } = await api('/triggers');
-  page.append(h('div', { class: 'row', style: 'margin-bottom:6px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Triggers'), admin ? h('button', { class: 'btn', onclick: () => triggerEditor(null) }, icon('plus', 16), 'New trigger') : null),
+  appendTo(page, h('div', { class: 'row', style: 'margin-bottom:6px' }, h('h2', { class: 'page-h grow', style: 'margin:0' }, 'Triggers'), admin ? h('button', { class: 'btn', onclick: () => triggerEditor(null) }, icon('plus', 16), 'New trigger') : null),
     siteBar(), h('p', { class: 'hint', style: 'margin:0 0 18px' }, 'Start the conversation for visitors: show a message after a delay on pages whose URL contains some text, or open the chat automatically.'),
     ...(triggers.length ? triggers.map(t => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, t.name), ' ', h('span', { class: 'pill' + (t.enabled ? ' ok' : '') }, t.enabled ? 'active' : 'paused'), t.open_chat ? h('span', { class: 'pill warn' }, 'auto-opens chat') : null,
       h('div', { class: 'hint' }, `Page URL ${t.url_contains ? 'contains "' + t.url_contains + '"' : 'any page'} · after ${t.delay}s`), h('div', { style: 'margin-top:6px' }, '💬 ' + t.message)),
@@ -422,7 +570,7 @@ async function renderDashboard(main) {
   ] : [];
   const done = steps.filter(x => x[2]).length;
   const siteName = S.site ? S.sites.find(x => x.id === S.site)?.name : S.sites.length > 1 ? 'all websites' : S.sites[0]?.name;
-  page.append(h('h2', {}, `${greet}, ${S.me.name.split(' ')[0]} 👋`), h('p', { class: 'hint', style: 'margin:-10px 0 18px' }, `${S.workspace.name} · ${siteName} · you are ${S.role.name}`),
+  appendTo(page, h('h2', {}, `${greet}, ${S.me.name.split(' ')[0]} 👋`), h('p', { class: 'hint', style: 'margin:-10px 0 18px' }, `${S.workspace.name} · ${siteName} · you are ${S.role.name}`),
     h('div', { class: 'grid' }, stat('msg', s.open, 'Open conversations'), stat('alert', s.needsHuman, 'Waiting for a human', s.needsHuman ? 'warn' : ''), stat('inbox', s.unassigned, 'Unassigned'), stat('eye', s.visitorsOnline, 'Visitors online'),
       stat('zap', s.today, 'New chats today'), stat('send', s.messagesToday, 'Messages today'), stat('check', s.resolved, 'Resolved total', 'ok'), stat('users', s.agentsOnline, 'Teammates online')),
     steps.length && done < steps.length ? h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Getting started'), h('span', { class: 'hint' }, `${done} of ${steps.length} done`)),
@@ -449,7 +597,7 @@ async function renderBot(main) {
   const page = h('div', { class: 'page' }); main.append(page);
   const [{ rules }, { settings }, { kb }, { flows }] = await Promise.all([api('/rules'), api('/settings'), api('/kb'), api('/flows')]);
   const admin = can('bot.manage');
-  page.append(h('h2', {}, 'Chatbot & flows'), siteBar(),
+  appendTo(page, h('h2', {}, 'Chatbot & flows'), siteBar(),
     h('div', { class: 'card' }, h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.botEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { botEnabled: e.target.checked }); toast('Saved'); }) }), 'Enable chatbot for new conversations'),
       h('div', { class: 'hint' }, 'The bot answers with the first rule that matches, and hands over to a human on request. As soon as an agent replies, the bot stops.'),
       h('label', {}, 'Try it'), h('div', { class: 'row' }, h('input', { id: 'bt', placeholder: 'Type a visitor message to test the rules…', class: 'grow' }),
@@ -527,12 +675,12 @@ let settingsTab = 'widget';
 async function renderSettings(main) {
   const page = h('div', { class: 'page' }); main.append(page);
   const TABS = [['widget', 'Widget', 'settings.manage'], ['sites', 'Websites'], ['canned', 'Saved replies'], ['team', 'Team', 'team.manage'], ['roles', 'Roles & permissions', 'roles.manage'],
-    ['audit', 'Audit log', 'audit.view'], ['workspace', 'Workspace'], ['account', 'My account']].filter(t => !t[2] || can(t[2]) || (t[0] === 'widget' && false));
+    ['spam', 'Spam protection', 'chats.block'], ['audit', 'Audit log', 'audit.view'], ['workspace', 'Workspace'], ['account', 'My account']].filter(t => !t[2] || can(t[2]) || (t[0] === 'widget' && false));
   if (!TABS.some(t => t[0] === settingsTab)) settingsTab = TABS[0][0];
-  page.append(h('h2', {}, 'Settings'), h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: settingsTab === k ? 'on' : '', onclick: () => { settingsTab = k; renderShell(); } }, l))));
+  appendTo(page, h('h2', {}, 'Settings'), h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: settingsTab === k ? 'on' : '', onclick: () => { settingsTab = k; renderShell(); } }, l))));
   const admin = can('settings.manage');
   if (settingsTab === 'widget') {
-    page.append(siteBar());
+    appendTo(page, siteBar());
 
     const { settings: s } = await api('/settings');
     const KEYS = ['title', 'subtitle', 'brandName', 'color', 'position', 'gradient', 'launcherStyle', 'launcherLabel', 'avatarUrl', 'theme', 'showBranding', 'prechatForm', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage',
@@ -560,7 +708,7 @@ async function renderSettings(main) {
     const save = guard(async () => {
       await api('/settings', 'PUT', Object.fromEntries(KEYS.map(k => [k, g(k)]))); toast('Saved — reload your site to see the changes');
     });
-    page.append(h('div', { class: 'split' }, h('div', {},
+    appendTo(page, h('div', { class: 'split' }, h('div', {},
       h('div', { class: 'card' }, h('h3', {}, 'Appearance'), h('div', { class: 'grid2' }, h('div', {}, ...inp('title', 'Title'), ...inp('color', 'Brand colour', 'color')), h('div', {}, ...inp('subtitle', 'Subtitle'), ...sel('position', 'Position', [['right', 'Bottom right'], ['left', 'Bottom left']]))),
         h('div', { class: 'grid2' }, h('div', {}, ...sel('launcherStyle', 'Launcher', [['circle', 'Round icon'], ['pill', 'Pill with label']])), h('div', {}, ...inp('launcherLabel', 'Launcher label'))),
         h('div', { class: 'grid2' }, h('div', {}, ...sel('theme', 'Theme', [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Match visitor system']])), h('div', {}, ...inp('avatarUrl', 'Avatar image URL', 'text', 'Shown in the header and next to replies'))),
@@ -580,7 +728,7 @@ async function renderSettings(main) {
   } else if (settingsTab === 'sites') {
     const manage = can('sites.manage');
     const nm = h('input', { placeholder: 'Website name, e.g. Acme Store' }), dm = h('input', { placeholder: 'https://acme.com (optional)' });
-    page.append(...S.sites.map(site => h('div', { class: 'card' },
+    appendTo(page, ...S.sites.map(site => h('div', { class: 'card' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, h('h3', {}, site.name), h('div', { class: 'hint', style: 'margin:0' }, site.domain || 'No domain set')),
         manage ? [h('button', { class: 'btn sec sm', onclick: guard(async () => { const n = prompt('Website name', site.name); if (!n) return; const d = prompt('Domain (optional)', site.domain || '') ?? site.domain; await api('/sites/' + site.id, 'PUT', { name: n, domain: d }); await boot(); }) }, 'Rename'),
           h('button', { class: 'btn sec sm', title: 'Issue a new install key. The old snippet stops working immediately.', onclick: guard(async () => { if (!confirm('Rotate the install key? The current snippet will stop working until you replace it.')) return; await api(`/sites/${site.id}/rotate-key`, 'POST'); toast('New key issued'); await boot(); }) }, 'Rotate key'),
@@ -594,7 +742,7 @@ async function renderSettings(main) {
         h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { const r = await api('/sites', 'POST', { name: nm.value, domain: dm.value }); S.site = r.site.id; toast('Website added with its own chatbot, settings and install code'); await boot(); }) }, icon('plus', 16), 'Add website')) : null);
   } else if (settingsTab === 'canned') {
     const sc = h('input', { placeholder: 'shortcut, e.g. thanks' }), tx = h('textarea', { rows: 2, placeholder: 'Reply text' }), manage = can('canned.manage');
-    page.append(manage ? h('div', { class: 'card' }, h('h3', {}, 'Saved replies'), h('div', { class: 'hint' }, 'Shared by the whole workspace. In the inbox, type / and a shortcut to insert one.'), h('label', {}, 'Shortcut'), sc, h('label', {}, 'Text'), tx,
+    appendTo(page, manage ? h('div', { class: 'card' }, h('h3', {}, 'Saved replies'), h('div', { class: 'hint' }, 'Shared by the whole workspace. In the inbox, type / and a shortcut to insert one.'), h('label', {}, 'Shortcut'), sc, h('label', {}, 'Text'), tx,
       h('button', { class: 'btn', style: 'margin-top:10px', onclick: guard(async () => { await api('/canned', 'POST', { shortcut: sc.value, text: tx.value }); S.canned = (await api('/canned')).canned; renderShell(); }) }, 'Add')) : null,
       h('div', { class: 'card' }, h('table', {}, h('tbody', {}, ...S.canned.map(c => h('tr', {}, h('td', {}, h('b', {}, '/' + c.shortcut)), h('td', {}, c.text),
         h('td', {}, manage ? h('button', { class: 'btn danger sm', onclick: guard(async () => { await api('/canned/' + c.id, 'DELETE'); S.canned = (await api('/canned')).canned; renderShell(); }) }, 'Delete') : null)))))));
@@ -617,7 +765,7 @@ async function renderSettings(main) {
     const canTouch = m => m.id !== S.me.id && (roles.find(r => r.id === m.role_id)?.permissions || []).every(p => S.perms.has(p));
     const f = { name: h('input', { placeholder: 'Full name' }), email: h('input', { type: 'email', placeholder: 'name@company.com' }), password: h('input', { type: 'password', placeholder: 'Temporary password (min 8)' }) };
     const rs = roleSel(roles.find(r => r.name === 'Agent')?.id), sp = sitePick(null);
-    page.append(h('div', { class: 'card', style: 'padding:0' }, h('table', {}, h('thead', {}, h('tr', {}, ...['Teammate', 'Role', 'Websites', 'Status', ''].map(x => h('th', {}, x)))),
+    appendTo(page, h('div', { class: 'card', style: 'padding:0' }, h('table', {}, h('thead', {}, h('tr', {}, ...['Teammate', 'Role', 'Websites', 'Status', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, ...members.map(m => h('tr', {}, h('td', {}, h('div', { class: 'row' }, avEl({ id: m.email, name: m.name }), h('div', {}, h('b', {}, m.name, m.id === S.me.id ? ' (you)' : ''), h('div', { class: 'hint', style: 'margin:0' }, m.email)))),
         h('td', {}, h('span', { class: 'pill' + (m.role === 'Owner' ? ' warn' : '') }, m.role)), h('td', {}, m.site_ids ? m.site_ids.map(id => S.sites.find(x => x.id === id)?.name).filter(Boolean).join(', ') : 'All'),
         h('td', {}, h('span', { class: 'pill ' + (m.online ? 'ok' : '') }, m.online ? 'online' : 'offline')),
@@ -645,28 +793,48 @@ async function renderSettings(main) {
             await (r ? api('/roles/' + r.id, 'PUT', body) : api('/roles', 'POST', body)); md.remove(); toast('Role saved — applies immediately'); renderShell(); }) }, 'Save role'))));
       document.body.append(md);
     };
-    page.append(h('div', { class: 'row', style: 'margin-bottom:14px' }, h('p', { class: 'hint grow', style: 'margin:0' }, 'Roles decide what each teammate can see and do. Changes apply instantly to everyone with that role. You can only grant permissions you have yourself.'),
+    appendTo(page, h('div', { class: 'row', style: 'margin-bottom:14px' }, h('p', { class: 'hint grow', style: 'margin:0' }, 'Roles decide what each teammate can see and do. Changes apply instantly to everyone with that role. You can only grant permissions you have yourself.'),
       h('button', { class: 'btn', onclick: () => editor(null) }, icon('plus', 16), 'New role')),
       ...roles.map(r => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('h3', {}, r.name, ' ', r.system ? h('span', { class: 'pill warn' }, 'all permissions') : null),
         h('div', { class: 'hint', style: 'margin:0' }, `${r.members} member${r.members === 1 ? '' : 's'} · ${r.permissions.length} of ${Object.keys(S.catalog).length} permissions`)),
         !r.system && r.permissions.every(p => S.perms.has(p)) ? [h('button', { class: 'btn sec sm', onclick: () => editor(r) }, 'Edit'),
           h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm(`Delete role "${r.name}"?`)) { await api('/roles/' + r.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null),
         h('div', { class: 'row', style: 'flex-wrap:wrap;gap:5px;margin-top:10px' }, ...r.permissions.map(p => h('span', { class: 'tag', title: S.catalog[p] }, p))))));
+  } else if (settingsTab === 'spam') {
+    const [{ blocks, events, last24h }, { settings: st }] = await Promise.all([api('/spam'), api('/settings')]);
+    const tv = h('select', { style: 'width:auto' }, ...[['keyword', 'Word or phrase'], ['ip', 'IP address'], ['email', 'Email'], ['visitor', 'Visitor ID']].map(([v, l]) => h('option', { value: v }, l)));
+    const val = h('input', { placeholder: 'e.g. casino, 203.0.113.7' });
+    const LBL = { keyword: 'Word', ip: 'IP', email: 'Email', visitor: 'Visitor' };
+    appendTo(page, siteBar(),
+      h('div', { class: 'grid' }, ...[['Blocked (24h)', last24h.blocked || 0, 'bad'], ['Flagged (24h)', last24h.flagged || 0, 'warn'], ['Reported by team (24h)', last24h.reported || 0, ''], ['Active blocks', blocks.length, '']]
+        .map(([l, n, c]) => h('div', { class: 'stat ' + (c === 'bad' ? 'warn' : '') }, h('div', { class: 'ico' }, icon('shield')), h('div', {}, h('b', {}, n), h('span', {}, l))))),
+      h('div', { class: 'card' }, h('h3', {}, 'Spam filter'), h('p', { class: 'hint' }, 'Messages are scored for links, scam phrases, spam campaigns seen across the platform, flooding and bots. High-risk messages are silently dropped (the spammer thinks it was sent); borderline ones reach your inbox marked “⚠ spam?”.'),
+        h('div', { class: 'row' }, ...[['off', 'Off'], ['normal', 'Normal (recommended)'], ['strict', 'Strict']].map(([v, l]) => h('label', { class: 'inline', style: 'margin-right:18px' },
+          h('input', { type: 'radio', name: 'sf', checked: (st.spamFilter || 'normal') === v, onchange: guard(async () => { await api('/settings', 'PUT', { spamFilter: v }); toast('Spam filter: ' + l); }) }), l)))),
+      h('div', { class: 'card' }, h('h3', {}, 'Blocklist'), h('div', { class: 'row', style: 'margin:10px 0' }, tv, h('div', { class: 'grow' }, val),
+        h('button', { class: 'btn', onclick: guard(async () => { await api('/spam/blocks', 'POST', { type: tv.value, value: val.value }); toast('Blocked'); renderShell(); }) }, 'Block')),
+        blocks.length ? h('table', {}, h('tbody', {}, ...blocks.map(b => h('tr', {}, h('td', {}, h('span', { class: 'tag' }, LBL[b.type] || b.type)), h('td', {}, h('code', {}, b.value)), h('td', { class: 'hint' }, `${b.reason || ''} · ${b.created_by} · ${ago(b.created)} ago${b.expires ? ' · expires in ' + Math.max(1, Math.round((b.expires - Date.now()) / 3600000)) + 'h' : ''}`),
+          h('td', { style: 'text-align:right' }, h('button', { class: 'btn sec sm', onclick: guard(async () => { await api('/spam/blocks/' + b.id, 'DELETE'); renderShell(); }) }, 'Unblock'))))))
+          : h('p', { class: 'hint' }, 'Nothing blocked yet. Block visitors from a conversation with the 🚫 button.')),
+      h('div', { class: 'card' }, h('h3', {}, 'Recent spam activity'), events.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Result', 'Score', 'Message', 'Why'].map(x => h('th', {}, x)))),
+        h('tbody', {}, ...events.map(e => h('tr', {}, h('td', { style: 'white-space:nowrap' }, ago(e.created) + ' ago'), h('td', {}, actionPill(e.action)), h('td', {}, e.score),
+          h('td', { style: 'max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: e.summary }, e.summary), h('td', { class: 'hint' }, e.signals.map(x => x.detail).join('; '))))))
+        : h('p', { class: 'hint' }, 'No spam detected yet 🎉')));
   } else if (settingsTab === 'audit') {
     const { entries } = await api('/audit');
-    page.append(h('div', { class: 'card', style: 'padding:0' }, entries.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Who', 'Action', 'Details'].map(x => h('th', {}, x)))),
+    appendTo(page, h('div', { class: 'card', style: 'padding:0' }, entries.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Who', 'Action', 'Details'].map(x => h('th', {}, x)))),
       h('tbody', {}, ...entries.map(e => h('tr', {}, h('td', { style: 'white-space:nowrap' }, new Date(e.created).toLocaleString()), h('td', {}, e.user_name), h('td', {}, h('span', { class: 'tag' }, e.action)), h('td', {}, e.detail || '')))))
       : h('div', { class: 'empty' }, 'No activity yet')));
   } else if (settingsTab === 'workspace') {
     const nm = h('input', { value: S.workspace.name, disabled: !can('workspace.manage') }), nw = h('input', { placeholder: 'e.g. My agency' });
-    page.append(h('div', { class: 'card', style: 'max-width:560px' }, h('h3', {}, 'This workspace'), h('label', {}, 'Name'), nm,
+    appendTo(page, h('div', { class: 'card', style: 'max-width:560px' }, h('h3', {}, 'This workspace'), h('label', {}, 'Name'), nm,
       can('workspace.manage') ? h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/workspace', 'PUT', { name: nm.value }); toast('Renamed'); await boot(); }) }, 'Save') : h('div', { class: 'hint' }, 'Only the workspace Owner can rename it.'),
       h('p', { class: 'hint', style: 'margin-top:14px' }, `You are ${S.role.name} here. ${S.sites.length} website${S.sites.length === 1 ? '' : 's'}, ${S.members.length} teammate${S.members.length === 1 ? '' : 's'}.`)),
       h('div', { class: 'card', style: 'max-width:560px' }, h('h3', {}, 'Create another workspace'), h('div', { class: 'hint' }, 'Separate business or client? Each workspace has its own websites, team, roles and data. Switch between them from the top of the sidebar.'),
         h('label', {}, 'Workspace name'), nw, h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/workspaces', 'POST', { name: nw.value }); S.site = 0; await boot(); toast('Workspace created'); }) }, 'Create workspace')));
   } else {
     const nm = h('input', { value: S.me.name }), cur = h('input', { type: 'password' }), nw = h('input', { type: 'password', placeholder: 'At least 8 characters' });
-    page.append(h('div', { class: 'card', style: 'max-width:460px' }, h('h3', {}, 'Profile'), h('label', {}, 'Name'), nm, h('label', {}, 'Email'), h('input', { value: S.me.email, disabled: true }),
+    appendTo(page, h('div', { class: 'card', style: 'max-width:460px' }, h('h3', {}, 'Profile'), h('label', {}, 'Name'), nm, h('label', {}, 'Email'), h('input', { value: S.me.email, disabled: true }),
       h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/me', 'PUT', { name: nm.value }); toast('Saved'); await boot(); }) }, 'Save')),
       h('div', { class: 'card', style: 'max-width:460px' }, h('h3', {}, 'Change password'), h('div', { class: 'hint' }, 'Signs you out on all other devices.'), h('label', {}, 'Current password'), cur, h('label', {}, 'New password'), nw,
         h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/me/password', 'POST', { current: cur.value, password: nw.value }); cur.value = nw.value = ''; toast('Password updated'); }) }, 'Update password')));

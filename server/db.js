@@ -62,10 +62,14 @@ CREATE TABLE IF NOT EXISTS triggers (id INTEGER PRIMARY KEY, site_id INTEGER NOT
 CREATE TABLE IF NOT EXISTS canned (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, shortcut TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(workspace_id, shortcut));
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, user_id INTEGER, user_name TEXT, action TEXT NOT NULL, detail TEXT, created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_audit_ws ON audit(workspace_id, id);
+CREATE TABLE IF NOT EXISTS platform_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS platform_audit (id INTEGER PRIMARY KEY, user_id INTEGER, user_name TEXT, action TEXT NOT NULL, detail TEXT, created INTEGER NOT NULL);
 `);
 
-for (const col of ['last_seen_at INTEGER', 'last_origin TEXT', 'last_error TEXT', 'last_error_at INTEGER']) {
-  try { db.exec(`ALTER TABLE sites ADD COLUMN ${col}`); } catch { /* already exists */ }
+for (const [t, col] of [['sites', 'last_seen_at INTEGER'], ['sites', 'last_origin TEXT'], ['sites', 'last_error TEXT'], ['sites', 'last_error_at INTEGER'],
+  ['users', 'platform_role TEXT'], ['users', 'disabled INTEGER NOT NULL DEFAULT 0'], ['users', 'last_login INTEGER'],
+  ['workspaces', "plan TEXT NOT NULL DEFAULT 'free'"], ['workspaces', 'suspended INTEGER NOT NULL DEFAULT 0'], ['workspaces', 'suspended_reason TEXT']]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already exists */ }
 }
 
 export const now = () => Date.now();
@@ -92,7 +96,7 @@ export const DEFAULT_SETTINGS = {
   aiEnabled: false, aiInstructions: 'You are a friendly support assistant for our company. Keep answers short.',
   ratingEnabled: true, businessHoursEnabled: false, hoursStart: '09:00', hoursEnd: '17:00', hoursDays: '1,2,3,4,5', timezone: 'UTC',
   webhookUrl: '', gradient: true, launcherStyle: 'circle', launcherLabel: 'Chat with us', avatarUrl: '', theme: 'light',
-  prechatForm: false, showBranding: true, emailNotifications: true, emailReplies: true, emailTranscript: false,
+  prechatForm: false, showBranding: true, emailNotifications: true, emailReplies: true, emailTranscript: false, spamFilter: 'normal',
 };
 
 export function getSettings(siteId) {
@@ -103,6 +107,18 @@ export function getSettings(siteId) {
 export function setSettings(siteId, patch) {
   const st = db.prepare('INSERT INTO site_settings(site_id,key,value) VALUES(?,?,?) ON CONFLICT(site_id,key) DO UPDATE SET value=excluded.value');
   for (const [k, v] of Object.entries(patch)) if (k in DEFAULT_SETTINGS) st.run(siteId, k, JSON.stringify(v));
+}
+
+export const PLATFORM_DEFAULTS = { allowSignup: true, announcement: '', plans: 'free,starter,pro,enterprise', fraudMode: 'enforce', reviewThreshold: 40, blockThreshold: 70, autoSuspend: false, autoSuspendThreshold: 250 };
+export function getPlatform() {
+  const out = { ...PLATFORM_DEFAULTS };
+  for (const r of db.prepare('SELECT key, value FROM platform_settings').all()) out[r.key] = JSON.parse(r.value);
+  if (process.env.ALLOW_SIGNUP === '0') out.allowSignup = false;
+  return out;
+}
+export function setPlatform(patch) {
+  const st = db.prepare('INSERT INTO platform_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+  for (const [k, v] of Object.entries(patch)) if (k in PLATFORM_DEFAULTS) st.run(k, JSON.stringify(v));
 }
 
 export const newSiteKey = () => 'ck_' + randomBytes(12).toString('hex');
@@ -147,10 +163,16 @@ export function createWorkspace(name, ownerId, siteName = 'My website', domain =
 }
 
 export function seed() {
-  if (db.prepare('SELECT 1 FROM users LIMIT 1').get()) return;
+  // Platform operators: the first account plus anyone listed in PLATFORM_ADMINS (comma-separated emails)
+  const promote = () => {
+    for (const e of (process.env.PLATFORM_ADMINS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)) db.prepare("UPDATE users SET platform_role='superadmin' WHERE email=?").run(e);
+    if (!db.prepare("SELECT 1 FROM users WHERE platform_role='superadmin'").get()) db.prepare("UPDATE users SET platform_role='superadmin' WHERE id=(SELECT MIN(id) FROM users)").run();
+  };
+  if (db.prepare('SELECT 1 FROM users LIMIT 1').get()) return promote();
   const email = (process.env.ADMIN_EMAIL || 'admin@example.com').toLowerCase();
   const pw = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === 'production' ? randomBytes(9).toString('base64url') : 'admin123');
   const uid = Number(db.prepare('INSERT INTO users(name,email,pass,created) VALUES(?,?,?,?)').run('Admin', email, hashPassword(pw), now()).lastInsertRowid);
   createWorkspace('My workspace', uid);
-  console.log(`Created owner account: ${email} / ${pw}  (change it under Settings → Account)`);
+  promote();
+  console.log(`Created platform admin + owner account: ${email} / ${pw}  (change it under Settings → My account)`);
 }

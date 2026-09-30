@@ -4,7 +4,7 @@ Zero npm dependencies. Requires Node ≥ 22.13 (uses built-in `node:sqlite`).
 
 ```bash
 npm start            # http://localhost:3000
-npm test             # end-to-end + permissions/isolation tests
+npm test             # end-to-end, permissions/isolation, platform and fraud tests
 ```
 
 - **Demo site** `/` — has the widget installed
@@ -16,6 +16,22 @@ npm test             # end-to-end + permissions/isolation tests
 - Enforced on the server for every API call **and every realtime event**; no privilege escalation (you can only grant permissions you hold; admins can't touch owners; the last Owner can't be removed). Role changes apply instantly to connected users.
 - One login can belong to several workspaces (agencies) and switch between them; **audit log** of team, role, website and settings changes; install-key rotation.
 - Env: `ALLOW_SIGNUP=0` to disable public sign-up, `DEMO=0` to hide the demo page's key.
+
+## Platform console (for you, the operator)
+The first account (plus anyone in `PLATFORM_ADMINS=a@x.com,b@y.com`) is a **platform admin** and gets *Platform console* in the sidebar:
+- **Overview** of every workspace, user, website install, sign-ups over time, plans and the busiest workspaces.
+- **Workspaces**: search, change plan, **suspend** (blocks dashboard, widget and live chats with a reason shown to the customer), reactivate, delete.
+- **Users**: disable/enable, reset password, grant/revoke platform admin.
+- **Platform settings**: open/close sign-up, announcement banner, plan names. **Platform audit** of every operator action.
+
+## Fraud & abuse detection
+Every risky action gets an explainable 0–100+ risk score; at the review threshold it lands in the **review queue**, at the block threshold it's blocked (or only logged in *monitor* mode).
+- **Sign-up fraud**: honeypot field, bot-speed form fills, disposable email domains, sign-up velocity per IP, bot user agents, blocklisted IP/email/domain.
+- **Account takeover**: progressive account lock after repeated wrong passwords, automatic 1-hour IP block for credential stuffing, alert on sign-in from a new network right after failures.
+- **Visitor spam**: links, URL shorteners, suspicious TLDs, scam/spam phrases, platform-wide **spam-campaign** detection (same message from many visitors), flooding, many identities per IP, bots. High-risk messages are silently dropped; borderline ones are delivered marked "⚠ spam?".
+- **Platform abuse**: agents sending phishing (credential requests with links, shorteners) are blocked; workspaces get a rolling **risk score**, with optional **auto-suspend**.
+- **Review queue**: confirm (block IP / email / domain / visitor, disable user, suspend workspace) or dismiss; platform-wide blocklist; unlock accounts; thresholds and mode.
+- **For each business**: 🚫 block/report visitors from the inbox (optionally by IP), *Spam protection* settings (filter Off/Normal/Strict, own blocked words/IPs, recent spam activity). Permission: `chats.block`.
 
 ## Features
 - **Embeddable widget** (`/widget.js`, Shadow-DOM isolated): launcher, proactive greeting bubble, quick-reply buttons, typing indicators, unread badge, email capture, persistent visitor identity and history, live page tracking.

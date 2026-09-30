@@ -271,7 +271,10 @@
     resetIfClosed(); state.emoji = false;
     var form = panel && panel.querySelector('form.in'); if (form) drawEmoji(form);
     var body = { body: text, page: location.href }; if (state.trigger) { body.trigger = state.trigger; state.trigger = null; }
-    api('message', body).then(function (r) { if (r.message) addMessage(r.message); });
+    api('message', body).then(function (r) {
+      if (r.message) addMessage(r.message);
+      else if (r.error) { state.messages.push({ id: 'err' + Date.now(), sender: 'system', body: '⚠️ Message not sent: ' + r.error, created: Date.now() }); render(); }
+    });
   }
 
   function connect() {
