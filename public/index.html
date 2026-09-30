@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chatly demo store</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:720px;margin:60px auto;padding:0 20px;color:#111827}a{color:#4f46e5}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}</style></head>
+<body>
+<h1>🛍 Demo Store</h1>
+<p>This page stands in for your website. The chat bubble in the corner is the Chatly widget — try saying “hi”, “pricing” or “talk to a human”.</p>
+<p>Agents reply from the <a href="/app/" target="_blank">dashboard</a> (default login <code>admin@example.com</code> / <code>admin123</code>).</p>
+<script>
+  fetch('/api/site-key').then(r => r.json()).then(d => {
+    var s = document.createElement('script'); s.src = '/widget.js'; s.setAttribute('data-key', d.key); document.body.appendChild(s);
+  });
+</script>
+</body></html>

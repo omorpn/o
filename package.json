@@ -1,0 +1,11 @@
+{
+  "name": "chatly",
+  "version": "1.0.0",
+  "description": "Self-hosted live chat, chatbot and shared inbox (a Tidio-style app). Zero dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "test": "node --no-warnings test/smoke.mjs"
+  }
+}
