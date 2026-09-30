@@ -3,7 +3,8 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, now, seed, getSettings, setSettings, hashPassword, checkPassword } from './db.js';
+import { db, now, seed, getSettings, setSettings, hashPassword, checkPassword, createSite, createWorkspace, newSiteKey } from './db.js';
+import { PERMISSIONS, cleanPerms } from './rbac.js';
 import { matchRule, parseRule, matchKb, aiAnswer, matchFlow, validateNodes, HUMAN_PHRASE } from './bot.js';
 import { sendMail, mailConfigured } from './mail.js';
 
@@ -49,8 +50,9 @@ const ipOf = req => {
 const secureReq = req => req.socket.encrypted || (HOPS && /https/i.test(String(req.headers['x-forwarded-proto'] || '')));
 
 // ---------- realtime hub ----------
-const agentStreams = new Set();           // { res, agentId }
-const visitorStreams = new Map();         // vid -> Set(res)
+// Agent streams carry the viewer's scope so every event is filtered by workspace, site access and permissions.
+const agentStreams = new Set();           // { res, userId, ws, sites: Set|null, viewAll, canReply }
+const visitorStreams = new Map();         // visitor key "<siteId>:<vid>" -> Set(res)
 const offlineTimers = new Map();
 
 function sse(res) {
@@ -58,41 +60,57 @@ function sse(res) {
   res.write('retry: 2000\n\n');
 }
 const frame = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-const toAgents = (event, data) => { const f = frame(event, data); for (const s of agentStreams) s.res.write(f); };
-const toVisitor = (vid, event, data) => { const f = frame(event, data); for (const r of visitorStreams.get(vid) || []) r.write(f); };
+const streamSees = (s, siteId, conv) => (s.sites === null || s.sites.has(siteId)) && (!conv || s.viewAll || !conv.assignee_id || conv.assignee_id === s.userId);
+function toAgents(ws, siteId, event, data, conv) {
+  const f = frame(event, data);
+  for (const s of agentStreams) if (s.ws === ws && (siteId == null || streamSees(s, siteId, conv))) s.res.write(f);
+}
+const toVisitor = (vkey, event, data) => { const f = frame(event, data); for (const r of visitorStreams.get(vkey) || []) r.write(f); };
+function toSiteVisitors(siteId, event, data) {
+  const f = frame(event, data), prefix = siteId + ':';
+  for (const [k, set] of visitorStreams) if (k.startsWith(prefix)) for (const r of set) r.write(f);
+}
 setInterval(() => {
   for (const s of agentStreams) s.res.write(': ping\n\n');
   for (const set of visitorStreams.values()) for (const r of set) r.write(': ping\n\n');
 }, 25_000).unref();
-const agentsOnline = () => new Set([...agentStreams].map(s => s.agentId)).size;
-const isOnline = vid => (visitorStreams.get(vid)?.size || 0) > 0;
+const agentsOnline = siteId => new Set([...agentStreams].filter(s => s.canReply && s.ws === siteWs(siteId) && (s.sites === null || s.sites.has(siteId))).map(s => s.userId)).size;
+const isOnline = vkey => (visitorStreams.get(vkey)?.size || 0) > 0;
+/** Ends a user's live connections in a workspace so they reconnect with fresh permissions. */
+function kickUser(userId, ws) { for (const s of agentStreams) if (s.userId === userId && s.ws === ws) s.res.end(); }
 
-// ---------- webhooks & business hours ----------
-function webhook(event, data) {
-  const url = getSettings().webhookUrl; if (!/^https?:\/\//.test(url)) return;
-  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, time: now(), data }), signal: AbortSignal.timeout(8000) }).catch(() => {});
+// ---------- sites, webhooks & business hours ----------
+const siteRow = id => db.prepare('SELECT * FROM sites WHERE id=?').get(id);
+const siteWs = id => siteRow(id)?.workspace_id;
+function webhook(siteId, event, data) {
+  const url = getSettings(siteId).webhookUrl; if (!/^https?:\/\//.test(url)) return;
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, site_id: siteId, time: now(), data }), signal: AbortSignal.timeout(8000) }).catch(() => {});
 }
-function withinHours() {
-  const s = getSettings(); if (!s.businessHoursEnabled) return true;
+function withinHours(siteId) {
+  const s = getSettings(siteId); if (!s.businessHoursEnabled) return true;
   try {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: s.timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map(p => [p.type, p.value]));
     const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday);
-    const cur = `${parts.hour}:${parts.minute}`;
-    return s.hoursDays.split(',').map(Number).includes(day) && cur >= s.hoursStart && cur < s.hoursEnd;
+    return s.hoursDays.split(',').map(Number).includes(day) && `${parts.hour}:${parts.minute}` >= s.hoursStart && `${parts.hour}:${parts.minute}` < s.hoursEnd;
   } catch { return true; }
 }
-const teamAvailable = () => agentsOnline() > 0 && withinHours();
+const teamAvailable = siteId => agentsOnline(siteId) > 0 && withinHours(siteId);
+function audit(ws, user, action, detail) {
+  db.prepare('INSERT INTO audit(workspace_id,user_id,user_name,action,detail,created) VALUES(?,?,?,?,?,?)').run(ws, user?.id ?? null, user?.name ?? 'system', action, detail ? String(detail).slice(0, 500) : null, now());
+}
 
 // ---------- domain ----------
-const visitorOut = v => v && ({ id: v.id, name: v.name, email: v.email, page: v.page, ua: v.ua, visits: v.visits, created: v.created, last_seen: v.last_seen, online: isOnline(v.id) });
+const visitorOut = v => v && ({ id: v.id, site_id: v.site_id, name: v.name, email: v.email, page: v.page, ua: v.ua, visits: v.visits, created: v.created, last_seen: v.last_seen, online: isOnline(v.id) });
 function convOut(c) {
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
-  const a = c.assignee_id ? db.prepare('SELECT name FROM agents WHERE id=?').get(c.assignee_id) : null;
-  return { id: c.id, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
+  const a = c.assignee_id ? db.prepare('SELECT name FROM users WHERE id=?').get(c.assignee_id) : null;
+  return { id: c.id, site_id: c.site_id, site_name: siteRow(c.site_id)?.name, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
     needs_human: !!c.needs_human, tags: c.tags ? JSON.parse(c.tags) : [], unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
 }
 const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, created: m.created });
 const getConv = id => db.prepare('SELECT * FROM conversations WHERE id=?').get(id);
+const emitConv = (c, event = 'conversation') => toAgents(c.workspace_id, c.site_id, event, convOut(c), c);
+const emitPresence = (v, online) => toAgents(siteWs(v.site_id), v.site_id, 'presence', { visitor_id: v.id, online, visitor: visitorOut(v) });
 
 function addMessage(conv, sender, body, { senderId = null, senderName = null, buttons = null, attachment = null } = {}) {
   const t = now();
@@ -102,36 +120,42 @@ function addMessage(conv, sender, body, { senderId = null, senderName = null, bu
     db.prepare('UPDATE conversations SET last_body=CASE WHEN ? THEN last_body ELSE ? END, updated=?, unread=unread+? WHERE id=?').run(sender === 'system' ? 1 : 0, body.slice(0, 140), t, sender === 'visitor' ? 1 : 0, conv.id);
   }
   const m = msgOut(db.prepare('SELECT * FROM messages WHERE id=?').get(info.lastInsertRowid));
-  const c = convOut(getConv(conv.id));
-  toAgents('message', { conv: c, message: m });
+  const fresh = getConv(conv.id);
+  toAgents(fresh.workspace_id, fresh.site_id, 'message', { conv: convOut(fresh), message: m }, fresh);
   if (sender !== 'note') toVisitor(conv.visitor_id, 'message', m);
   return m;
 }
 
-function openConversation(vid) {
-  let c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vid);
+function openConversation(site, vkey) {
+  let c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
   if (c) return c;
-  const t = now(); const s = getSettings();
-  const id = db.prepare('INSERT INTO conversations(visitor_id,status,bot_active,created,updated) VALUES(?,?,?,?,?)').run(vid, 'open', s.botEnabled ? 1 : 0, t, t).lastInsertRowid;
+  const t = now();
+  const id = db.prepare('INSERT INTO conversations(site_id,workspace_id,visitor_id,status,bot_active,created,updated) VALUES(?,?,?,?,?,?,?)')
+    .run(site.id, site.workspace_id, vkey, 'open', getSettings(site.id).botEnabled ? 1 : 0, t, t).lastInsertRowid;
   c = getConv(id);
-  toAgents('conversation', convOut(c));
-  webhook('conversation.created', convOut(c));
+  emitConv(c);
+  webhook(site.id, 'conversation.created', convOut(c));
   return c;
 }
 
 // ---------- email ----------
 const logMailErr = e => console.error('mail error:', e.message);
-function mailAgents(subject, text) {
-  if (!mailConfigured()) return;
-  for (const a of db.prepare('SELECT email FROM agents').all()) sendMail({ to: a.email, subject, text }).catch(logMailErr);
+/** Members who can reply on a site. */
+function siteResponders(siteId) {
+  const ws = siteWs(siteId);
+  return db.prepare('SELECT u.id, u.name, u.email, m.site_ids, r.permissions FROM members m JOIN users u ON u.id=m.user_id JOIN roles r ON r.id=m.role_id WHERE m.workspace_id=?').all(ws)
+    .filter(r => JSON.parse(r.permissions).includes('chats.reply') && (!r.site_ids || JSON.parse(r.site_ids).includes(siteId)));
 }
 function maybeNotify(convId) {
-  const s = getSettings(); if (!mailConfigured() || !s.emailNotifications || agentsOnline() > 0) return;
-  const c = getConv(convId); if (!c || (c.last_notified && now() - c.last_notified < 10 * 60_000)) return;
+  const c = getConv(convId); if (!c) return;
+  const s = getSettings(c.site_id); if (!mailConfigured() || !s.emailNotifications || agentsOnline(c.site_id) > 0) return;
+  if (c.last_notified && now() - c.last_notified < 10 * 60_000) return;
   db.prepare('UPDATE conversations SET last_notified=? WHERE id=?').run(now(), convId);
   const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
   const last = db.prepare("SELECT body FROM messages WHERE conv_id=? AND sender='visitor' ORDER BY id DESC LIMIT 1").get(convId)?.body || '';
-  mailAgents(`[${s.brandName}] New message from ${v.name || v.email || 'a visitor'}`, `${last}\n\nReply in your dashboard: conversation #${convId}${v.email ? `\nVisitor email: ${v.email}` : ''}`);
+  const subject = `[${siteRow(c.site_id).name}] New message from ${v.name || v.email || 'a visitor'}`;
+  const text = `${last}\n\nReply in your dashboard: conversation #${convId}${v.email ? `\nVisitor email: ${v.email}` : ''}`;
+  for (const a of siteResponders(c.site_id)) sendMail({ to: a.email, subject, text }).catch(logMailErr);
 }
 function emailVisitor(convId, subject, text) {
   if (!mailConfigured()) return;
@@ -144,7 +168,7 @@ function transcriptText(convId) {
     .map(m => `[${new Date(m.created).toISOString()}] ${m.sender === 'visitor' ? (v.name || 'Visitor') : m.sender_name || m.sender}: ${m.body}`).join('\n');
 }
 
-// ---------- flows ----------
+// ---------- flows & bot ----------
 const setFlow = (id, st) => db.prepare('UPDATE conversations SET flow_state=? WHERE id=?').run(st ? JSON.stringify(st) : null, id);
 function runFlow(convId, flow, nodeId) {
   for (let steps = 0; nodeId && steps < 25; steps++) {
@@ -159,7 +183,7 @@ function runFlow(convId, flow, nodeId) {
 /** Consumes the visitor's answer if a flow is waiting on one. Returns true when handled. */
 function flowAnswer(conv, text) {
   const st = conv.flow_state ? JSON.parse(conv.flow_state) : null; if (!st) return false;
-  const f = db.prepare('SELECT * FROM flows WHERE id=?').get(st.flow);
+  const f = db.prepare('SELECT * FROM flows WHERE id=? AND site_id=?').get(st.flow, conv.site_id);
   const flow = f && { ...f, nodes: JSON.parse(f.nodes) }, n = flow?.nodes.find(x => x.id === st.node);
   if (!n) { setFlow(conv.id, null); return false; }
   if (n.type === 'choice') {
@@ -168,37 +192,33 @@ function flowAnswer(conv, text) {
     runFlow(conv.id, flow, o.next); return true;
   }
   if (n.type === 'ask') {
-    const label = n.field;
     if (n.field === 'email') {
       const email = text.toLowerCase();
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { addMessage(getConv(conv.id), 'bot', "That doesn't look like a valid email — could you try again?", { senderName: 'Bot' }); return true; }
+      if (!EMAIL.test(email)) { addMessage(getConv(conv.id), 'bot', "That doesn't look like a valid email — could you try again?", { senderName: 'Bot' }); return true; }
       db.prepare('UPDATE visitors SET email=? WHERE id=?').run(email, conv.visitor_id);
       addMessage(getConv(conv.id), 'system', `Visitor shared their email: ${email}`);
     } else if (n.field === 'name') db.prepare('UPDATE visitors SET name=? WHERE id=?').run(text.slice(0, 100), conv.visitor_id);
-    else addMessage(getConv(conv.id), 'system', `${label === 'phone' ? 'Phone' : 'Answer'}: ${text}`);
+    else addMessage(getConv(conv.id), 'system', `${n.field === 'phone' ? 'Phone' : 'Answer'}: ${text}`);
     const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(conv.visitor_id);
-    toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(v) });
-    if (n.field === 'email') webhook('visitor.identified', visitorOut(v));
+    emitPresence(v, isOnline(v.id));
+    if (n.field === 'email') webhook(conv.site_id, 'visitor.identified', visitorOut(v));
     runFlow(conv.id, flow, n.next); return true;
   }
   setFlow(conv.id, null); return false;
 }
-
 function handoff(conv) {
   setFlow(conv.id, null);
-  const s = getSettings(); const online = teamAvailable();
+  const s = getSettings(conv.site_id), online = teamAvailable(conv.site_id);
   db.prepare('UPDATE conversations SET bot_active=0, needs_human=1 WHERE id=?').run(conv.id);
-  const fresh = getConv(conv.id);
-  addMessage(fresh, 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
+  addMessage(getConv(conv.id), 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
   toVisitor(conv.visitor_id, 'handoff', { online, hasEmail: !!db.prepare('SELECT email FROM visitors WHERE id=?').get(conv.visitor_id)?.email });
   maybeNotify(conv.id);
-  toAgents('conversation', convOut(getConv(conv.id)));
+  emitConv(getConv(conv.id));
 }
-
 function botRespond(convId, text) {
   const conv = getConv(convId);
   if (!conv || !conv.bot_active) return;
-  const s = getSettings();
+  const siteId = conv.site_id, s = getSettings(siteId);
   const reply = (body, buttons) => addMessage(getConv(convId), 'bot', body, { senderName: 'Bot', buttons });
   toVisitor(conv.visitor_id, 'typing', { who: 'bot' });
   setTimeout(async () => {
@@ -207,18 +227,18 @@ function botRespond(convId, text) {
       if (!cur || !cur.bot_active) return;
       if (text.toLowerCase() === HUMAN_PHRASE) return handoff(cur);
       if (flowAnswer(cur, text)) return;
-      const flow = matchFlow(text);
+      const flow = matchFlow(siteId, text);
       if (flow) return runFlow(convId, flow, flow.nodes[0].id);
-      const rule = matchRule(text);
+      const rule = matchRule(siteId, text);
       if (rule) { reply(rule.reply, rule.buttons); if (rule.handoff) handoff(getConv(convId)); return; }
-      const kb = matchKb(text);
+      const kb = matchKb(siteId, text);
       if (kb) return reply(kb.answer);
       if (s.aiEnabled) {
         const hist = db.prepare("SELECT sender, body FROM messages WHERE conv_id=? AND sender IN ('visitor','bot','agent') ORDER BY id DESC LIMIT 10").all(convId).reverse()
           .map(m => ({ role: m.sender === 'visitor' ? 'user' : 'assistant', body: m.body }));
         const msgs = []; for (const m of hist) { if (msgs.length && msgs.at(-1).role === m.role) msgs.at(-1).content += '\n' + m.body; else msgs.push({ role: m.role, content: m.body }); }
         while (msgs.length && msgs[0].role !== 'user') msgs.shift();
-        const ans = await aiAnswer(msgs, s.aiInstructions);
+        const ans = await aiAnswer(siteId, msgs, s.aiInstructions);
         if (ans && getConv(convId)?.bot_active) return reply(ans);
       }
       if (getConv(convId)?.bot_active) reply(s.fallbackMessage, ['Talk to a human']);
@@ -226,13 +246,13 @@ function botRespond(convId, text) {
   }, 700);
 }
 
-function upsertVisitor(vid, page, req) {
+function upsertVisitor(site, vkey, page, req) {
   const t = now(); const ua = str(req.headers['user-agent'], 300);
-  const ex = db.prepare('SELECT * FROM visitors WHERE id=?').get(vid);
-  if (!ex) db.prepare('INSERT INTO visitors(id,created,last_seen,page,ua) VALUES(?,?,?,?,?)').run(vid, t, t, page, ua);
+  const ex = db.prepare('SELECT * FROM visitors WHERE id=?').get(vkey);
+  if (!ex) db.prepare('INSERT INTO visitors(id,site_id,created,last_seen,page,ua) VALUES(?,?,?,?,?,?)').run(vkey, site.id, t, t, page, ua);
   else db.prepare('UPDATE visitors SET last_seen=?, page=COALESCE(NULLIF(?,\'\'),page), ua=?, visits=visits+? WHERE id=?')
-    .run(t, page, ua, t - ex.last_seen > 30 * 60_000 ? 1 : 0, vid);
-  return db.prepare('SELECT * FROM visitors WHERE id=?').get(vid);
+    .run(t, page, ua, t - ex.last_seen > 30 * 60_000 ? 1 : 0, vkey);
+  return db.prepare('SELECT * FROM visitors WHERE id=?').get(vkey);
 }
 
 async function saveUpload(b) {
@@ -246,8 +266,9 @@ async function saveUpload(b) {
 }
 
 // ---------- widget API (public) ----------
-function corsFor(req, res) {
-  const allowed = getSettings().allowedOrigins.split(',').map(s => s.trim()).filter(Boolean);
+const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+function corsFor(req, res, siteId) {
+  const allowed = siteId ? getSettings(siteId).allowedOrigins.split(',').map(s => s.trim()).filter(Boolean) : ['*'];
   const origin = req.headers.origin;
   const ok = allowed.includes('*') || (origin && allowed.includes(origin));
   res.setHeader('Vary', 'Origin');
@@ -259,107 +280,137 @@ function corsFor(req, res) {
   return ok;
 }
 const VID = /^[A-Za-z0-9_-]{8,64}$/;
-function widgetCtx(key, vid) {
-  if (key !== getSettings().siteKey) fail(403, 'Invalid site key');
-  if (!VID.test(vid || '')) fail(400, 'Invalid visitor id');
-}
-const publicSettings = s => ({ gradient: s.gradient, launcherStyle: s.launcherStyle, launcherLabel: s.launcherLabel, avatarUrl: s.avatarUrl, theme: s.theme, prechatForm: s.prechatForm, showBranding: s.showBranding,
-  triggers: db.prepare('SELECT id,url_contains,delay,message,open_chat FROM triggers WHERE enabled=1').all().map(t => ({ ...t, open_chat: !!t.open_chat })), ratingEnabled: s.ratingEnabled, title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting,
-  askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
+const siteByKey = key => (typeof key === 'string' && key.length < 80 && db.prepare('SELECT * FROM sites WHERE site_key=?').get(key)) || fail(403, 'Invalid site key');
+const publicSettings = (siteId, s) => ({ gradient: s.gradient, launcherStyle: s.launcherStyle, launcherLabel: s.launcherLabel, avatarUrl: s.avatarUrl, theme: s.theme, prechatForm: s.prechatForm, showBranding: s.showBranding,
+  triggers: db.prepare('SELECT id,url_contains,delay,message,open_chat FROM triggers WHERE site_id=? AND enabled=1').all(siteId).map(t => ({ ...t, open_chat: !!t.open_chat })), ratingEnabled: s.ratingEnabled,
+  title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting, askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
 
 async function widgetRoute(req, res, url) {
   const route = url.pathname.slice('/api/widget/'.length);
-  if (req.method === 'OPTIONS') { corsFor(req, res); res.writeHead(204); return res.end(); }
-  if (!corsFor(req, res)) fail(403, 'Origin not allowed');
+  if (req.method === 'OPTIONS') { corsFor(req, res, null); res.writeHead(204); return res.end(); }
+  let site, vid, b = {};
+  if (route === 'events' && req.method === 'GET') { site = siteByKey(url.searchParams.get('key')); vid = url.searchParams.get('vid'); }
+  else if (req.method === 'POST') { b = await readBody(req, route === 'upload' ? 4_500_000 : 200_000); site = siteByKey(b.key); vid = b.vid; }
+  else fail(404, 'Not found');
+  if (!corsFor(req, res, site.id)) fail(403, 'Origin not allowed');
+  if (!VID.test(vid || '')) fail(400, 'Invalid visitor id');
+  const vkey = `${site.id}:${vid}`, ws = site.workspace_id;
 
-  if (route === 'events' && req.method === 'GET') {
-    const vid = url.searchParams.get('vid'); widgetCtx(url.searchParams.get('key'), vid);
-    upsertVisitor(vid, '', req);
+  if (route === 'events') {
+    const v = upsertVisitor(site, vkey, '', req);
     sse(res);
-    if (!visitorStreams.has(vid)) visitorStreams.set(vid, new Set());
-    visitorStreams.get(vid).add(res);
-    clearTimeout(offlineTimers.get(vid));
-    toAgents('presence', { visitor_id: vid, online: true, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(vid)) });
-    res.write(frame('ready', { agentsOnline: teamAvailable() }));
+    if (!visitorStreams.has(vkey)) visitorStreams.set(vkey, new Set());
+    visitorStreams.get(vkey).add(res);
+    clearTimeout(offlineTimers.get(vkey));
+    emitPresence(v, true);
+    res.write(frame('ready', { agentsOnline: teamAvailable(site.id) }));
     req.on('close', () => {
-      const set = visitorStreams.get(vid); set?.delete(res);
+      const set = visitorStreams.get(vkey); set?.delete(res);
       if (set && !set.size) {
-        visitorStreams.delete(vid);
-        offlineTimers.set(vid, setTimeout(() => toAgents('presence', { visitor_id: vid, online: false }), 4000));
+        visitorStreams.delete(vkey);
+        offlineTimers.set(vkey, setTimeout(() => { offlineTimers.delete(vkey); toAgents(ws, site.id, 'presence', { visitor_id: vkey, online: false }); }, 4000));
       }
     });
     return;
   }
-  if (req.method !== 'POST') fail(404, 'Not found');
-  const b = await readBody(req, route === 'upload' ? 4_500_000 : 200_000);
-  widgetCtx(b.key, b.vid);
   limit('w:' + ipOf(req), 120, 60_000);
 
   if (route === 'init') {
-    const v = upsertVisitor(b.vid, str(b.page, 500), req);
-    const s = getSettings();
-    const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(b.vid);
+    const v = upsertVisitor(site, vkey, str(b.page, 500), req);
+    const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
     const messages = conv ? db.prepare('SELECT * FROM messages WHERE conv_id=? AND sender!=\'note\' ORDER BY id').all(conv.id).map(msgOut) : [];
-    toAgents('presence', { visitor_id: v.id, online: true, visitor: visitorOut(v) });
-    return send(res, 200, { settings: publicSettings(s), visitor: { name: v.name, email: v.email }, messages, agentsOnline: teamAvailable() });
+    emitPresence(v, true);
+    return send(res, 200, { settings: publicSettings(site.id, getSettings(site.id)), visitor: { name: v.name, email: v.email }, messages, agentsOnline: teamAvailable(site.id) });
   }
   if (route === 'ping') {
-    const v = upsertVisitor(b.vid, str(b.page, 500), req);
-    toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(v) });
+    const v = upsertVisitor(site, vkey, str(b.page, 500), req);
+    emitPresence(v, isOnline(vkey));
     return send(res, 200, { ok: true });
   }
   if (route === 'message') {
-    limit('wm:' + b.vid, 30, 60_000);
+    limit('wm:' + vkey, 30, 60_000);
     const body = str(b.body, 2000); if (!body) fail(400, 'Empty message');
-    upsertVisitor(b.vid, str(b.page, 500), req);
-    const conv = openConversation(b.vid);
+    const v = upsertVisitor(site, vkey, str(b.page, 500), req);
+    const conv = openConversation(site, vkey);
     if (b.trigger && db.prepare('SELECT COUNT(*) n FROM messages WHERE conv_id=?').get(conv.id).n === 0) {
-      const t = db.prepare('SELECT message FROM triggers WHERE id=?').get(Number(b.trigger)); if (t) addMessage(conv, 'bot', t.message, { senderName: 'Bot' });
+      const t = db.prepare('SELECT message FROM triggers WHERE id=? AND site_id=?').get(Number(b.trigger), site.id);
+      if (t) addMessage(conv, 'bot', t.message, { senderName: 'Bot' });
     }
     const m = addMessage(conv, 'visitor', body);
-    webhook('message.created', { conversation_id: conv.id, sender: 'visitor', body, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid)) });
+    webhook(site.id, 'message.created', { conversation_id: conv.id, sender: 'visitor', body, visitor: visitorOut(v) });
     botRespond(conv.id, body);
     if (!conv.bot_active) maybeNotify(conv.id);
     return send(res, 200, { message: m });
   }
   if (route === 'upload') {
-    limit('wu:' + b.vid, 10, 60_000);
-    const att = await saveUpload(b); const conv = openConversation(b.vid);
-    const m = addMessage(conv, 'visitor', `📎 ${att.name}`, { attachment: att });
-    return send(res, 200, { message: m });
+    limit('wu:' + vkey, 10, 60_000);
+    upsertVisitor(site, vkey, '', req);
+    const att = await saveUpload(b); const conv = openConversation(site, vkey);
+    return send(res, 200, { message: addMessage(conv, 'visitor', `📎 ${att.name}`, { attachment: att }) });
   }
   if (route === 'rate') {
     const rating = Math.round(Number(b.rating));
     if (!(rating >= 1 && rating <= 5)) fail(400, 'Rating must be 1-5');
-    const c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='closed' AND rating IS NULL ORDER BY id DESC LIMIT 1").get(b.vid);
+    const c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='closed' AND rating IS NULL ORDER BY id DESC LIMIT 1").get(vkey);
     if (!c) fail(404, 'Nothing to rate');
     db.prepare('UPDATE conversations SET rating=?, rating_comment=? WHERE id=?').run(rating, str(b.comment, 500), c.id);
     addMessage(getConv(c.id), 'system', `Visitor rated this conversation ${rating}/5${b.comment ? ': ' + str(b.comment, 500) : ''}`);
-    webhook('conversation.rated', { conversation_id: c.id, rating });
+    webhook(site.id, 'conversation.rated', { conversation_id: c.id, rating });
     return send(res, 200, { ok: true });
   }
-  if (route === 'typing') { toAgents('typing', { visitor_id: b.vid, conv_id: null }); return send(res, 200, { ok: true }); }
+  if (route === 'typing') { toAgents(ws, site.id, 'typing', { visitor_id: vkey }); return send(res, 200, { ok: true }); }
   if (route === 'identify') {
     const name = str(b.name, 100), email = str(b.email, 200).toLowerCase();
-    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Invalid email');
-    upsertVisitor(b.vid, '', req);
-    db.prepare('UPDATE visitors SET name=COALESCE(NULLIF(?,\'\'),name), email=COALESCE(NULLIF(?,\'\'),email) WHERE id=?').run(name, email, b.vid);
-    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid);
-    const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(b.vid);
+    if (email && !EMAIL.test(email)) fail(400, 'Invalid email');
+    upsertVisitor(site, vkey, '', req);
+    db.prepare('UPDATE visitors SET name=COALESCE(NULLIF(?,\'\'),name), email=COALESCE(NULLIF(?,\'\'),email) WHERE id=?').run(name, email, vkey);
+    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(vkey);
+    const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
     if (conv && email) addMessage(conv, 'system', `Visitor shared their email: ${email}`);
-    if (email) webhook('visitor.identified', visitorOut(v));
-    toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(v) });
+    if (email) webhook(site.id, 'visitor.identified', visitorOut(v));
+    emitPresence(v, isOnline(vkey));
     return send(res, 200, { ok: true });
   }
   fail(404, 'Not found');
 }
 
-// ---------- agent API ----------
-function authAgent(req) {
-  const tok = cookies(req).sid; if (!tok) return null;
-  return db.prepare('SELECT a.id, a.name, a.email, a.role FROM sessions s JOIN agents a ON a.id=s.agent_id WHERE s.token=?').get(tok) || null;
+// ---------- auth & access control ----------
+const setSession = (res, req, tok) => res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${secureReq(req) ? '; Secure' : ''}`);
+function newSession(res, req, userId, ws) {
+  const tok = randomBytes(24).toString('hex');
+  db.prepare('INSERT INTO sessions(token,user_id,workspace_id,created) VALUES(?,?,?,?)').run(tok, userId, ws, now());
+  setSession(res, req, tok);
 }
-const agentOut = a => ({ id: a.id, name: a.name, email: a.email, role: a.role });
+const memberOf = (userId, ws) => db.prepare('SELECT m.*, r.name role_name, r.permissions FROM members m JOIN roles r ON r.id=m.role_id WHERE m.user_id=? AND m.workspace_id=?').get(userId, ws);
+const firstWorkspace = userId => db.prepare('SELECT workspace_id FROM members WHERE user_id=? ORDER BY created LIMIT 1').get(userId)?.workspace_id ?? null;
+
+/** Resolves the signed-in user, their current workspace, role, permissions and site access. */
+function authCtx(req) {
+  const tok = cookies(req).sid; if (!tok) return null;
+  const sess = db.prepare('SELECT * FROM sessions WHERE token=?').get(tok); if (!sess) return null;
+  if (now() - sess.created > 30 * 86400_000) { db.prepare('DELETE FROM sessions WHERE token=?').run(tok); return null; }
+  const user = db.prepare('SELECT id, name, email FROM users WHERE id=?').get(sess.user_id); if (!user) return null;
+  let ws = sess.workspace_id, mem = ws && memberOf(user.id, ws);
+  if (!mem) { ws = firstWorkspace(user.id); mem = ws && memberOf(user.id, ws); db.prepare('UPDATE sessions SET workspace_id=? WHERE token=?').run(ws, tok); }
+  if (!mem) return { user, tok, ws: null, perms: new Set(), siteIds: [], role: null };
+  const perms = new Set(JSON.parse(mem.permissions));
+  const all = db.prepare('SELECT id FROM sites WHERE workspace_id=? ORDER BY id').all(ws).map(r => r.id);
+  const limited = mem.site_ids ? JSON.parse(mem.site_ids) : null;
+  return { user, tok, ws, perms, role: { id: mem.role_id, name: mem.role_name }, siteLimit: limited, siteIds: limited ? all.filter(id => limited.includes(id)) : all };
+}
+const isSubset = (a, b) => [...a].every(p => b.has(p));
+const rolePerms = roleId => new Set(JSON.parse(db.prepare('SELECT permissions FROM roles WHERE id=?').get(roleId)?.permissions || '[]'));
+const ownerCount = ws => db.prepare("SELECT COUNT(*) n FROM members m JOIN roles r ON r.id=m.role_id WHERE m.workspace_id=? AND r.system=1").get(ws).n;
+const roleOut = r => ({ id: r.id, name: r.name, system: !!r.system, permissions: JSON.parse(r.permissions), members: db.prepare('SELECT COUNT(*) n FROM members WHERE role_id=?').get(r.id).n });
+const siteOut = s => ({ id: s.id, name: s.name, domain: s.domain, site_key: s.site_key, created: s.created });
+function cleanSiteIds(ws, list) {
+  if (list == null) return null;
+  if (!Array.isArray(list)) fail(400, 'site_ids must be a list');
+  const valid = new Set(db.prepare('SELECT id FROM sites WHERE workspace_id=?').all(ws).map(r => r.id));
+  const ids = [...new Set(list.map(Number))].filter(id => valid.has(id));
+  if (!ids.length) fail(400, 'Pick at least one website, or give access to all');
+  return ids;
+}
 
 async function apiRoute(req, res, url) {
   const p = url.pathname, m = req.method;
@@ -368,53 +419,164 @@ async function apiRoute(req, res, url) {
   if (p === '/api/auth/login' && m === 'POST') {
     limit('login:' + ipOf(req), 10, 60_000);
     const b = await readBody(req);
-    const a = db.prepare('SELECT * FROM agents WHERE email=?').get(str(b.email, 200).toLowerCase());
-    if (!a || !checkPassword(String(b.password || ''), a.pass)) fail(401, 'Invalid email or password');
-    const tok = randomBytes(24).toString('hex');
-    db.prepare('INSERT INTO sessions(token,agent_id,created) VALUES(?,?,?)').run(tok, a.id, now());
-    res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${secureReq(req) ? '; Secure' : ''}`);
-    return send(res, 200, { agent: agentOut(a) });
+    const u = db.prepare('SELECT * FROM users WHERE email=?').get(str(b.email, 200).toLowerCase());
+    if (!u || !checkPassword(String(b.password || ''), u.pass)) fail(401, 'Invalid email or password');
+    newSession(res, req, u.id, firstWorkspace(u.id));
+    return send(res, 200, { ok: true });
   }
-  const me = authAgent(req);
+  if (p === '/api/auth/signup' && m === 'POST') {
+    if (process.env.ALLOW_SIGNUP === '0') fail(403, 'Sign-up is disabled on this server');
+    limit('signup:' + ipOf(req), 5, 60 * 60_000);
+    const b = await readBody(req);
+    const name = str(b.name, 80), email = str(b.email, 200).toLowerCase(), pw = String(b.password || ''), wsName = str(b.workspace, 80) || `${name}'s workspace`;
+    if (!name || !EMAIL.test(email)) fail(400, 'Your name and a valid email are required');
+    if (pw.length < 8) fail(400, 'Password must be at least 8 characters');
+    if (db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) fail(409, 'An account with this email already exists — sign in instead');
+    const uid = Number(db.prepare('INSERT INTO users(name,email,pass,created) VALUES(?,?,?,?)').run(name, email, hashPassword(pw), now()).lastInsertRowid);
+    const { wsId } = createWorkspace(wsName, uid, str(b.site_name, 80) || 'My website', str(b.domain, 200) || null);
+    audit(wsId, { id: uid, name }, 'workspace.created', wsName);
+    newSession(res, req, uid, wsId);
+    return send(res, 200, { ok: true });
+  }
+  const ctx = authCtx(req);
   if (p === '/api/auth/logout' && m === 'POST') {
-    const tok = cookies(req).sid; if (tok) db.prepare('DELETE FROM sessions WHERE token=?').run(tok);
+    if (ctx) db.prepare('DELETE FROM sessions WHERE token=?').run(ctx.tok);
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
     return send(res, 200, {});
   }
-  if (!me) fail(401, 'Not authenticated');
-  const admin = () => { if (me.role !== 'admin') fail(403, 'Admins only'); };
+  if (!ctx) fail(401, 'Not authenticated');
+  const me = ctx.user, ws = ctx.ws;
+  const can = perm => ctx.perms.has(perm);
+  const need = (...perms) => { if (!perms.some(can)) fail(403, `You don't have permission to do this (${perms.join(' or ')})`); };
   const bodyId = v => { const n = Number(v); if (!Number.isInteger(n)) fail(400, 'Bad id'); return n; };
+  const log = (action, detail) => audit(ws, me, action, detail);
 
-  if (p === '/api/me') return send(res, 200, { agent: agentOut(me), siteKey: getSettings().siteKey, aiConfigured: !!process.env.ANTHROPIC_API_KEY, mailConfigured: mailConfigured() });
+  if (p === '/api/me' && m === 'GET') {
+    const workspaces = db.prepare('SELECT w.id, w.name, r.name role FROM members m JOIN workspaces w ON w.id=m.workspace_id JOIN roles r ON r.id=m.role_id WHERE m.user_id=? ORDER BY w.name').all(me.id);
+    return send(res, 200, { user: me, workspace: ws ? db.prepare('SELECT id, name FROM workspaces WHERE id=?').get(ws) : null, workspaces, role: ctx.role, permissions: [...ctx.perms],
+      sites: ctx.siteIds.map(id => siteOut(siteRow(id))), catalog: PERMISSIONS, aiConfigured: !!process.env.ANTHROPIC_API_KEY, mailConfigured: mailConfigured(), signupEnabled: process.env.ALLOW_SIGNUP !== '0' });
+  }
+  if (p === '/api/me/password' && m === 'POST') {
+    const b = await readBody(req); const u = db.prepare('SELECT * FROM users WHERE id=?').get(me.id);
+    if (!checkPassword(String(b.current || ''), u.pass)) fail(403, 'Current password is wrong');
+    if (String(b.password || '').length < 8) fail(400, 'Password must be at least 8 characters');
+    db.prepare('UPDATE users SET pass=? WHERE id=?').run(hashPassword(b.password), me.id);
+    db.prepare('DELETE FROM sessions WHERE user_id=? AND token!=?').run(me.id, ctx.tok);
+    return send(res, 200, {});
+  }
+  if (p === '/api/me' && m === 'PUT') {
+    const b = await readBody(req); const name = str(b.name, 80); if (!name) fail(400, 'Name is required');
+    db.prepare('UPDATE users SET name=? WHERE id=?').run(name, me.id); return send(res, 200, {});
+  }
+  if (p === '/api/workspaces' && m === 'POST') {
+    limit('ws:' + me.id, 10, 60 * 60_000);
+    const b = await readBody(req); const name = str(b.name, 80); if (!name) fail(400, 'Workspace name is required');
+    const { wsId } = createWorkspace(name, me.id, str(b.site_name, 80) || 'My website', str(b.domain, 200) || null);
+    audit(wsId, me, 'workspace.created', name);
+    db.prepare('UPDATE sessions SET workspace_id=? WHERE token=?').run(wsId, ctx.tok);
+    return send(res, 200, { id: wsId });
+  }
+  if (p === '/api/workspaces/switch' && m === 'POST') {
+    const b = await readBody(req); const id = bodyId(b.id);
+    if (!memberOf(me.id, id)) fail(404, 'Workspace not found');
+    db.prepare('UPDATE sessions SET workspace_id=? WHERE token=?').run(id, ctx.tok);
+    return send(res, 200, {});
+  }
+  if (!ws) fail(403, 'You are not a member of any workspace. Create one to continue.');
 
+  if (p === '/api/workspace' && m === 'PUT') {
+    need('workspace.manage'); const b = await readBody(req); const name = str(b.name, 80); if (!name) fail(400, 'Name is required');
+    db.prepare('UPDATE workspaces SET name=? WHERE id=?').run(name, ws); log('workspace.renamed', name); return send(res, 200, {});
+  }
+
+  // --- realtime ---
   if (p === '/api/events' && m === 'GET') {
     sse(res);
-    const entry = { res, agentId: me.id };
-    const wasOnline = agentsOnline() > 0;
+    const entry = { res, userId: me.id, ws, sites: ctx.siteLimit ? new Set(ctx.siteIds) : null, viewAll: can('chats.view_all'), canReply: can('chats.reply') };
+    const before = new Map(ctx.siteIds.map(id => [id, teamAvailable(id)]));
     agentStreams.add(entry);
     res.write(frame('ready', {}));
-    if (!wasOnline) toVisitorsAll('agents', { online: true });
-    req.on('close', () => { agentStreams.delete(entry); if (agentsOnline() === 0) toVisitorsAll('agents', { online: false }); });
+    const announce = () => { for (const [id, was] of before) { const nowOn = teamAvailable(id); if (nowOn !== was) toSiteVisitors(id, 'agents', { online: nowOn }); } };
+    announce();
+    req.on('close', () => { for (const id of before.keys()) before.set(id, teamAvailable(id)); agentStreams.delete(entry); announce(); });
     return;
   }
 
-  if (p === '/api/stats' && m === 'GET') {
-    const one = (q, ...a) => db.prepare(q).get(...a).n;
-    const day = new Date(); day.setHours(0, 0, 0, 0);
-    return send(res, 200, {
-      open: one("SELECT COUNT(*) n FROM conversations WHERE status='open'"),
-      unassigned: one("SELECT COUNT(*) n FROM conversations WHERE status='open' AND assignee_id IS NULL"),
-      needsHuman: one("SELECT COUNT(*) n FROM conversations WHERE status='open' AND needs_human=1"),
-      today: one('SELECT COUNT(*) n FROM conversations WHERE created>=?', day.getTime()),
-      messagesToday: one('SELECT COUNT(*) n FROM messages WHERE created>=?', day.getTime()),
-      visitorsOnline: visitorStreams.size, agentsOnline: agentsOnline(),
-      resolved: one("SELECT COUNT(*) n FROM conversations WHERE status='closed'"),
-    });
+  // --- sites ---
+  const siteParam = () => {
+    const id = Number(url.searchParams.get('site'));
+    if (!ctx.siteIds.includes(id)) fail(404, 'Website not found');
+    return id;
+  };
+  if (p === '/api/sites' && m === 'GET') return send(res, 200, { sites: ctx.siteIds.map(id => siteOut(siteRow(id))) });
+  if (p === '/api/sites' && m === 'POST') {
+    need('sites.manage'); const b = await readBody(req); const name = str(b.name, 80); if (!name) fail(400, 'Website name is required');
+    const id = createSite(ws, name, str(b.domain, 200) || null); log('site.created', name);
+    return send(res, 200, { site: siteOut(siteRow(id)) });
+  }
+  if ((x = p.match(/^\/api\/sites\/(\d+)(\/rotate-key)?$/))) {
+    need('sites.manage'); const s = siteRow(+x[1]);
+    if (!s || s.workspace_id !== ws || !ctx.siteIds.includes(s.id)) fail(404, 'Website not found');
+    if (x[2] && m === 'POST') { db.prepare('UPDATE sites SET site_key=? WHERE id=?').run(newSiteKey(), s.id); log('site.key_rotated', s.name); return send(res, 200, { site: siteOut(siteRow(s.id)) }); }
+    if (m === 'PUT') {
+      const b = await readBody(req); const name = str(b.name, 80); if (!name) fail(400, 'Website name is required');
+      db.prepare('UPDATE sites SET name=?, domain=? WHERE id=?').run(name, str(b.domain, 200) || null, s.id); log('site.updated', name); return send(res, 200, {});
+    }
+    if (m === 'DELETE') {
+      if (db.prepare('SELECT COUNT(*) n FROM sites WHERE workspace_id=?').get(ws).n <= 1) fail(400, "You can't delete the only website in a workspace");
+      db.prepare('DELETE FROM sites WHERE id=?').run(s.id); log('site.deleted', s.name); return send(res, 200, {});
+    }
   }
 
+  // --- stats ---
+  const scopeSites = () => { const q = url.searchParams.get('site'); if (q) return [siteParam()]; return ctx.siteIds; };
+  const inSites = ids => `(${ids.map(Number).join(',') || 'NULL'})`;
+  if (p === '/api/stats' && m === 'GET') {
+    need('chats.view'); const ids = scopeSites(), S = inSites(ids);
+    const one = (q, ...a) => db.prepare(q).get(...a).n;
+    const day = new Date(); day.setHours(0, 0, 0, 0);
+    let visitorsOnline = 0; for (const k of visitorStreams.keys()) if (ids.includes(Number(k.split(':')[0]))) visitorsOnline++;
+    return send(res, 200, {
+      open: one(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND status='open'`),
+      unassigned: one(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND status='open' AND assignee_id IS NULL`),
+      needsHuman: one(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND status='open' AND needs_human=1`),
+      today: one(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND created>=?`, day.getTime()),
+      messagesToday: one(`SELECT COUNT(*) n FROM messages m JOIN conversations c ON c.id=m.conv_id WHERE c.site_id IN ${S} AND m.created>=?`, day.getTime()),
+      visitorsOnline, agentsOnline: new Set([...agentStreams].filter(s => s.ws === ws).map(s => s.userId)).size,
+      resolved: one(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND status='closed'`),
+    });
+  }
+  if (p === '/api/analytics' && m === 'GET') {
+    need('analytics.view'); const S = inSites(scopeSites());
+    const days = []; const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    for (let i = 13; i >= 0; i--) {
+      const a = d0.getTime() - i * 86400000;
+      days.push({ date: new Date(a).toISOString().slice(0, 10),
+        chats: db.prepare(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND created>=? AND created<?`).get(a, a + 86400000).n,
+        messages: db.prepare(`SELECT COUNT(*) n FROM messages m JOIN conversations c ON c.id=m.conv_id WHERE c.site_id IN ${S} AND m.created>=? AND m.created<? AND m.sender!='system'`).get(a, a + 86400000).n });
+    }
+    const total = db.prepare(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S}`).get().n;
+    const botOnly = db.prepare(`SELECT COUNT(*) n FROM conversations WHERE site_id IN ${S} AND needs_human=0 AND first_reply IS NULL AND bot_active=1`).get().n;
+    const fr = db.prepare(`SELECT AVG(first_reply) a FROM conversations WHERE site_id IN ${S} AND first_reply IS NOT NULL`).get().a;
+    const cs = db.prepare(`SELECT AVG(rating) a, COUNT(rating) n FROM conversations WHERE site_id IN ${S} AND rating IS NOT NULL`).get();
+    const agents = db.prepare(`SELECT u.name, COUNT(DISTINCT c.id) chats, AVG(c.rating) csat FROM conversations c JOIN users u ON u.id=c.assignee_id WHERE c.site_id IN ${S} GROUP BY u.id ORDER BY chats DESC LIMIT 20`).all()
+      .map(a => ({ name: a.name, chats: a.chats, csat: a.csat ? Math.round(a.csat * 10) / 10 : null }));
+    return send(res, 200, { days, total, agents, botHandledPct: total ? Math.round(botOnly / total * 100) : 0, avgFirstResponseSec: fr ? Math.round(fr / 1000) : null,
+      csat: cs.n ? Math.round(cs.a * 10) / 10 : null, ratings: cs.n, contacts: db.prepare(`SELECT COUNT(*) n FROM visitors WHERE site_id IN ${S} AND email IS NOT NULL`).get().n });
+  }
+
+  // --- conversations ---
+  const loadConv = id => {
+    const c = getConv(id);
+    if (!c || c.workspace_id !== ws || !ctx.siteIds.includes(c.site_id)) fail(404, 'Conversation not found');
+    if (!can('chats.view_all') && c.assignee_id && c.assignee_id !== me.id) fail(404, 'Conversation not found');
+    return c;
+  };
   if (p === '/api/conversations' && m === 'GET') {
+    need('chats.view');
     const st = url.searchParams.get('status'), f = url.searchParams.get('filter'), q = str(url.searchParams.get('q') || '', 100);
-    let sql = 'SELECT c.* FROM conversations c JOIN visitors v ON v.id=c.visitor_id WHERE 1=1'; const args = [];
+    let sql = `SELECT c.* FROM conversations c JOIN visitors v ON v.id=c.visitor_id WHERE c.workspace_id=? AND c.site_id IN ${inSites(scopeSites())}`; const args = [ws];
+    if (!can('chats.view_all')) { sql += ' AND (c.assignee_id IS NULL OR c.assignee_id=?)'; args.push(me.id); }
     if (st === 'open' || st === 'closed') { sql += ' AND c.status=?'; args.push(st); }
     if (f === 'mine') { sql += ' AND c.assignee_id=?'; args.push(me.id); }
     if (f === 'unassigned') sql += ' AND c.assignee_id IS NULL';
@@ -425,188 +587,190 @@ async function apiRoute(req, res, url) {
     return send(res, 200, { conversations: db.prepare(sql).all(...args).map(convOut) });
   }
   if ((x = p.match(/^\/api\/conversations\/(\d+)$/)) && m === 'GET') {
-    const c = getConv(+x[1]) || fail(404, 'Not found');
+    need('chats.view'); const c = loadConv(+x[1]);
     return send(res, 200, { conversation: convOut(c), messages: db.prepare('SELECT * FROM messages WHERE conv_id=? ORDER BY id').all(c.id).map(msgOut) });
   }
   if ((x = p.match(/^\/api\/conversations\/(\d+)\/(messages|note|read|typing|status|assign|upload|tags)$/)) && m === 'POST') {
-    const c = getConv(+x[1]) || fail(404, 'Not found');
+    need('chats.view'); const c = loadConv(+x[1]);
     const b = await readBody(req, x[2] === 'upload' ? 4_500_000 : 200_000);
-    const refresh = () => toAgents('conversation', convOut(getConv(c.id)));
+    const refresh = () => emitConv(getConv(c.id));
+    const S = getSettings(c.site_id);
+    const takeOver = () => db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
     switch (x[2]) {
       case 'messages': {
-        const body = str(b.body, 4000); if (!body) fail(400, 'Empty message');
-        db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
-        webhook('message.created', { conversation_id: c.id, sender: 'agent', body });
-        if (getSettings().emailReplies && !isOnline(c.visitor_id)) emailVisitor(c.id, `${getSettings().brandName}: ${me.name} replied to your message`, `${body}\n\n— ${me.name}, ${getSettings().brandName}`);
+        need('chats.reply'); const body = str(b.body, 4000); if (!body) fail(400, 'Empty message');
+        takeOver();
+        webhook(c.site_id, 'message.created', { conversation_id: c.id, sender: 'agent', body });
+        if (S.emailReplies && !isOnline(c.visitor_id)) emailVisitor(c.id, `${S.brandName}: ${me.name} replied to your message`, `${body}\n\n— ${me.name}, ${S.brandName}`);
         return send(res, 200, { message: addMessage(getConv(c.id), 'agent', body, { senderId: me.id, senderName: me.name }) });
       }
       case 'note': {
-        const body = str(b.body, 4000); if (!body) fail(400, 'Empty note');
+        need('chats.reply'); const body = str(b.body, 4000); if (!body) fail(400, 'Empty note');
         return send(res, 200, { message: addMessage(c, 'note', body, { senderId: me.id, senderName: me.name }) });
       }
       case 'upload': {
-        const att = await saveUpload(b);
-        db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
+        need('chats.reply'); const att = await saveUpload(b); takeOver();
         return send(res, 200, { message: addMessage(getConv(c.id), 'agent', `📎 ${att.name}`, { senderId: me.id, senderName: me.name, attachment: att }) });
       }
       case 'tags': {
+        need('chats.reply');
         const tags = [...new Set((Array.isArray(b.tags) ? b.tags : []).map(t => str(t, 24).toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, '')).filter(Boolean))].slice(0, 8);
         db.prepare('UPDATE conversations SET tags=? WHERE id=?').run(tags.length ? JSON.stringify(tags) : null, c.id); refresh(); return send(res, 200, { tags });
       }
       case 'read': db.prepare('UPDATE conversations SET unread=0 WHERE id=?').run(c.id); refresh(); return send(res, 200, {});
-      case 'typing': toVisitor(c.visitor_id, 'typing', { who: 'agent', name: me.name }); return send(res, 200, {});
+      case 'typing': need('chats.reply'); toVisitor(c.visitor_id, 'typing', { who: 'agent', name: me.name }); return send(res, 200, {});
       case 'status': {
-        const s = b.status === 'closed' ? 'closed' : 'open';
+        need('chats.close'); const s = b.status === 'closed' ? 'closed' : 'open';
         db.prepare('UPDATE conversations SET status=?, needs_human=0 WHERE id=?').run(s, c.id);
-        if (s === 'closed') { addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`); toVisitor(c.visitor_id, 'closed', { rating: !!getSettings().ratingEnabled });
-          if (getSettings().emailTranscript) emailVisitor(c.id, `Your conversation with ${getSettings().brandName}`, transcriptText(c.id)); webhook('conversation.closed', { conversation_id: c.id }); }
+        if (s === 'closed') {
+          addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`); toVisitor(c.visitor_id, 'closed', { rating: !!S.ratingEnabled });
+          if (S.emailTranscript) emailVisitor(c.id, `Your conversation with ${S.brandName}`, transcriptText(c.id));
+          webhook(c.site_id, 'conversation.closed', { conversation_id: c.id });
+        }
         refresh(); return send(res, 200, {});
       }
       case 'assign': {
+        need('chats.assign');
         const aid = b.agent_id == null ? null : bodyId(b.agent_id);
-        if (aid && !db.prepare('SELECT 1 FROM agents WHERE id=?').get(aid)) fail(404, 'No such agent');
+        if (aid) {
+          const mem = memberOf(aid, ws);
+          if (!mem || (mem.site_ids && !JSON.parse(mem.site_ids).includes(c.site_id))) fail(400, "That teammate doesn't have access to this website");
+          if (!JSON.parse(mem.permissions).includes('chats.reply')) fail(400, "That teammate's role can't reply to chats");
+        }
+        const prev = c.assignee_id;
         db.prepare('UPDATE conversations SET assignee_id=? WHERE id=?').run(aid, c.id);
-        refresh(); return send(res, 200, {});
+        refresh();
+        // agents who lost visibility of this chat (no view_all) get a removal event
+        if (prev && prev !== aid) for (const s of agentStreams) if (s.ws === ws && s.userId === prev && !s.viewAll) s.res.write(frame('deleted', { id: c.id }));
+        return send(res, 200, {});
       }
     }
   }
   if ((x = p.match(/^\/api\/conversations\/(\d+)$/)) && m === 'DELETE') {
-    admin(); db.prepare('DELETE FROM conversations WHERE id=?').run(+x[1]);
-    toAgents('deleted', { id: +x[1] }); return send(res, 200, {});
-  }
-
-  if (p === '/api/visitors' && m === 'GET') {
-    const online = [...visitorStreams.keys()];
-    const rows = online.length ? db.prepare(`SELECT * FROM visitors WHERE id IN (${online.map(() => '?').join(',')}) ORDER BY last_seen DESC`).all(...online) : [];
-    return send(res, 200, { visitors: rows.map(visitorOut) });
-  }
-
-  if (p === '/api/mail/test' && m === 'POST') {
-    admin();
-    try { await sendMail({ to: me.email, subject: 'Chatly test email', text: 'Email delivery from Chatly is working.' }); } catch (e) { fail(400, e.message); }
-    return send(res, 200, {});
-  }
-
-  if (p === '/api/flows' && m === 'GET') return send(res, 200, { flows: db.prepare('SELECT * FROM flows ORDER BY id').all().map(f => ({ ...f, enabled: !!f.enabled, nodes: JSON.parse(f.nodes) })) });
-  if (p === '/api/flows' && m === 'POST') {
-    admin(); const f = flowFields(await readBody(req));
-    return send(res, 200, { id: db.prepare('INSERT INTO flows(name,keywords,nodes,enabled) VALUES(?,?,?,?)').run(f.name, f.keywords, f.nodes, f.enabled).lastInsertRowid });
-  }
-  if ((x = p.match(/^\/api\/flows\/(\d+)$/))) {
-    admin();
-    if (m === 'PUT') { const f = flowFields(await readBody(req)); db.prepare('UPDATE flows SET name=?,keywords=?,nodes=?,enabled=? WHERE id=?').run(f.name, f.keywords, f.nodes, f.enabled, +x[1]); return send(res, 200, {}); }
-    if (m === 'DELETE') { db.prepare('DELETE FROM flows WHERE id=?').run(+x[1]); return send(res, 200, {}); }
-  }
-
-  if (p === '/api/kb') {
-    if (m === 'GET') return send(res, 200, { kb: db.prepare('SELECT * FROM kb ORDER BY id').all() });
-    if (m === 'POST') {
-      admin(); const b = await readBody(req); const q = str(b.question, 300), a = str(b.answer, 3000);
-      if (!q || !a) fail(400, 'Question and answer required');
-      db.prepare('INSERT INTO kb(question,answer) VALUES(?,?)').run(q, a); return send(res, 200, {});
-    }
-  }
-  if ((x = p.match(/^\/api\/kb\/(\d+)$/)) && m === 'DELETE') { admin(); db.prepare('DELETE FROM kb WHERE id=?').run(+x[1]); return send(res, 200, {}); }
-
-  if (p === '/api/analytics' && m === 'GET') {
-    const days = []; const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-    for (let i = 13; i >= 0; i--) {
-      const a = d0.getTime() - i * 86400000;
-      days.push({ date: new Date(a).toISOString().slice(0, 10),
-        chats: db.prepare('SELECT COUNT(*) n FROM conversations WHERE created>=? AND created<?').get(a, a + 86400000).n,
-        messages: db.prepare("SELECT COUNT(*) n FROM messages WHERE created>=? AND created<? AND sender!='system'").get(a, a + 86400000).n });
-    }
-    const total = db.prepare('SELECT COUNT(*) n FROM conversations').get().n;
-    const botOnly = db.prepare('SELECT COUNT(*) n FROM conversations WHERE needs_human=0 AND first_reply IS NULL AND bot_active=1').get().n;
-    const fr = db.prepare('SELECT AVG(first_reply) a FROM conversations WHERE first_reply IS NOT NULL').get().a;
-    const cs = db.prepare('SELECT AVG(rating) a, COUNT(rating) n FROM conversations WHERE rating IS NOT NULL').get();
-    return send(res, 200, { days, total, botHandledPct: total ? Math.round(botOnly / total * 100) : 0, avgFirstResponseSec: fr ? Math.round(fr / 1000) : null,
-      csat: cs.n ? Math.round(cs.a * 10) / 10 : null, ratings: cs.n, contacts: db.prepare('SELECT COUNT(*) n FROM visitors WHERE email IS NOT NULL').get().n });
-  }
-  if (p === '/api/export/contacts.csv' && m === 'GET') {
-    const q = v => `"${String(v ?? '').replace(/"/g, '""').replace(/^([=+\-@])/, "'$1")}"`;
-    const rows = db.prepare('SELECT * FROM visitors WHERE email IS NOT NULL ORDER BY created DESC').all();
-    res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="contacts.csv"' });
-    return res.end('name,email,visits,first_seen,last_page\n' + rows.map(v => [v.name, v.email, v.visits, new Date(v.created).toISOString(), v.page].map(q).join(',')).join('\n'));
+    need('chats.delete'); const c = loadConv(+x[1]);
+    db.prepare('DELETE FROM conversations WHERE id=?').run(c.id); log('conversation.deleted', `#${c.id}`);
+    toAgents(ws, c.site_id, 'deleted', { id: c.id }); return send(res, 200, {});
   }
   if ((x = p.match(/^\/api\/conversations\/(\d+)\/transcript$/)) && m === 'GET') {
-    const c = getConv(+x[1]) || fail(404, 'Not found'); const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
-    const lines = db.prepare("SELECT * FROM messages WHERE conv_id=? AND sender!='note' ORDER BY id").all(c.id)
-      .map(mm => `[${new Date(mm.created).toISOString()}] ${mm.sender === 'visitor' ? (v.name || 'Visitor') : mm.sender_name || mm.sender}: ${mm.body}`);
+    need('chats.view'); const c = loadConv(+x[1]);
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `attachment; filename="conversation-${c.id}.txt"` });
-    return res.end(lines.join('\n'));
-  }
-
-  if (p === '/api/contacts' && m === 'GET') {
-    const q = str(url.searchParams.get('q') || '', 100);
-    const rows = db.prepare(`SELECT v.*, (SELECT COUNT(*) FROM conversations c WHERE c.visitor_id=v.id) convs FROM visitors v
-      WHERE (v.email IS NOT NULL OR v.name IS NOT NULL) AND (?='' OR v.name LIKE ? OR v.email LIKE ?) ORDER BY v.last_seen DESC LIMIT 300`).all(q, `%${q}%`, `%${q}%`);
-    return send(res, 200, { contacts: rows.map(v => ({ ...visitorOut(v), notes: v.notes, conversations: v.convs })) });
-  }
-  if ((x = p.match(/^\/api\/contacts\/([\w-]+)$/))) {
-    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(x[1]) || fail(404, 'Not found');
-    if (m === 'GET') return send(res, 200, { contact: { ...visitorOut(v), notes: v.notes },
-      conversations: db.prepare('SELECT * FROM conversations WHERE visitor_id=? ORDER BY id DESC').all(v.id).map(convOut) });
-    if (m === 'PUT') {
-      const b = await readBody(req); const email = str(b.email, 200).toLowerCase();
-      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Invalid email');
-      db.prepare('UPDATE visitors SET name=?, email=?, notes=? WHERE id=?').run(str(b.name, 100) || null, email || null, str(b.notes, 2000) || null, v.id);
-      toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(v.id)) });
-      return send(res, 200, {});
-    }
-  }
-  if (p === '/api/triggers' && m === 'GET') return send(res, 200, { triggers: db.prepare('SELECT * FROM triggers ORDER BY id').all().map(t => ({ ...t, open_chat: !!t.open_chat, enabled: !!t.enabled })) });
-  if (p === '/api/triggers' && m === 'POST') {
-    admin(); const t = triggerFields(await readBody(req));
-    return send(res, 200, { id: db.prepare('INSERT INTO triggers(name,url_contains,delay,message,open_chat,enabled) VALUES(?,?,?,?,?,?)').run(t.name, t.url, t.delay, t.message, t.open, t.enabled).lastInsertRowid });
-  }
-  if ((x = p.match(/^\/api\/triggers\/(\d+)$/))) {
-    admin();
-    if (m === 'PUT') { const t = triggerFields(await readBody(req)); db.prepare('UPDATE triggers SET name=?,url_contains=?,delay=?,message=?,open_chat=?,enabled=? WHERE id=?').run(t.name, t.url, t.delay, t.message, t.open, t.enabled, +x[1]); return send(res, 200, {}); }
-    if (m === 'DELETE') { db.prepare('DELETE FROM triggers WHERE id=?').run(+x[1]); return send(res, 200, {}); }
+    return res.end(transcriptText(c.id));
   }
   if (p === '/api/tags' && m === 'GET') {
-    const counts = {}; for (const r of db.prepare('SELECT tags FROM conversations WHERE tags IS NOT NULL').all()) for (const t of JSON.parse(r.tags)) counts[t] = (counts[t] || 0) + 1;
+    need('chats.view');
+    const counts = {}; for (const r of db.prepare(`SELECT tags FROM conversations WHERE workspace_id=? AND site_id IN ${inSites(ctx.siteIds)} AND tags IS NOT NULL`).all(ws)) for (const t of JSON.parse(r.tags)) counts[t] = (counts[t] || 0) + 1;
     return send(res, 200, { tags: Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) });
   }
 
+  // --- visitors & contacts ---
+  if (p === '/api/visitors' && m === 'GET') {
+    need('chats.view', 'contacts.view');
+    const ids = new Set(scopeSites());
+    const online = [...visitorStreams.keys()].filter(k => ids.has(Number(k.split(':')[0])));
+    const rows = online.length ? db.prepare(`SELECT * FROM visitors WHERE id IN (${online.map(() => '?').join(',')}) ORDER BY last_seen DESC`).all(...online) : [];
+    return send(res, 200, { visitors: rows.map(v => ({ ...visitorOut(v), site_name: siteRow(v.site_id)?.name })) });
+  }
+  if (p === '/api/contacts' && m === 'GET') {
+    need('contacts.view'); const q = str(url.searchParams.get('q') || '', 100);
+    const rows = db.prepare(`SELECT v.*, (SELECT COUNT(*) FROM conversations c WHERE c.visitor_id=v.id) convs FROM visitors v
+      WHERE v.site_id IN ${inSites(scopeSites())} AND (v.email IS NOT NULL OR v.name IS NOT NULL) AND (?='' OR v.name LIKE ? OR v.email LIKE ?) ORDER BY v.last_seen DESC LIMIT 300`).all(q, `%${q}%`, `%${q}%`);
+    return send(res, 200, { contacts: rows.map(v => ({ ...visitorOut(v), site_name: siteRow(v.site_id)?.name, notes: v.notes, conversations: v.convs })) });
+  }
+  if (p === '/api/export/contacts.csv' && m === 'GET') {
+    need('contacts.export');
+    const q = v => `"${String(v ?? '').replace(/"/g, '""').replace(/^([=+\-@])/, "'$1")}"`;
+    const rows = db.prepare(`SELECT * FROM visitors WHERE site_id IN ${inSites(scopeSites())} AND email IS NOT NULL ORDER BY created DESC`).all();
+    log('contacts.exported', `${rows.length} contacts`);
+    res.writeHead(200, { 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="contacts.csv"' });
+    return res.end('name,email,website,visits,first_seen,last_page\n' + rows.map(v => [v.name, v.email, siteRow(v.site_id)?.name, v.visits, new Date(v.created).toISOString(), v.page].map(q).join(',')).join('\n'));
+  }
+  if ((x = p.match(/^\/api\/contacts\/([\w:-]+)$/))) {
+    need('contacts.view');
+    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(x[1]);
+    if (!v || !ctx.siteIds.includes(v.site_id)) fail(404, 'Contact not found');
+    if (m === 'GET') {
+      let convs = db.prepare('SELECT * FROM conversations WHERE visitor_id=? ORDER BY id DESC').all(v.id);
+      if (!can('chats.view_all')) convs = convs.filter(c => !c.assignee_id || c.assignee_id === me.id);
+      return send(res, 200, { contact: { ...visitorOut(v), site_name: siteRow(v.site_id)?.name, notes: v.notes }, conversations: convs.map(convOut) });
+    }
+    if (m === 'PUT') {
+      need('contacts.edit');
+      const b = await readBody(req); const email = str(b.email, 200).toLowerCase();
+      if (email && !EMAIL.test(email)) fail(400, 'Invalid email');
+      db.prepare('UPDATE visitors SET name=?, email=?, notes=? WHERE id=?').run(str(b.name, 100) || null, email || null, str(b.notes, 2000) || null, v.id);
+      emitPresence(db.prepare('SELECT * FROM visitors WHERE id=?').get(v.id), isOnline(v.id));
+      return send(res, 200, {});
+    }
+  }
+
+  // --- saved replies (workspace-wide) ---
   if (p === '/api/canned') {
-    if (m === 'GET') return send(res, 200, { canned: db.prepare('SELECT * FROM canned ORDER BY shortcut').all() });
+    if (m === 'GET') return send(res, 200, { canned: db.prepare('SELECT id, shortcut, text FROM canned WHERE workspace_id=? ORDER BY shortcut').all(ws) });
     if (m === 'POST') {
+      need('canned.manage');
       const b = await readBody(req); const sc = str(b.shortcut, 30).toLowerCase().replace(/[^a-z0-9_-]/g, ''), text = str(b.text, 2000);
       if (!sc || !text) fail(400, 'Shortcut and text required');
-      try { db.prepare('INSERT INTO canned(shortcut,text) VALUES(?,?)').run(sc, text); } catch { fail(409, 'Shortcut already exists'); }
+      try { db.prepare('INSERT INTO canned(workspace_id,shortcut,text) VALUES(?,?,?)').run(ws, sc, text); } catch { fail(409, 'Shortcut already exists'); }
       return send(res, 200, {});
     }
   }
-  if ((x = p.match(/^\/api\/canned\/(\d+)$/)) && m === 'DELETE') { db.prepare('DELETE FROM canned WHERE id=?').run(+x[1]); return send(res, 200, {}); }
+  if ((x = p.match(/^\/api\/canned\/(\d+)$/)) && m === 'DELETE') { need('canned.manage'); db.prepare('DELETE FROM canned WHERE id=? AND workspace_id=?').run(+x[1], ws); return send(res, 200, {}); }
 
-  if (p === '/api/rules' && m === 'GET') return send(res, 200, { rules: db.prepare('SELECT * FROM rules ORDER BY position, id').all().map(parseRule) });
+  // --- per-site automation & settings (?site=ID) ---
+  if (p === '/api/flows' && m === 'GET') { const sid = siteParam(); return send(res, 200, { flows: db.prepare('SELECT * FROM flows WHERE site_id=? ORDER BY id').all(sid).map(f => ({ ...f, enabled: !!f.enabled, nodes: JSON.parse(f.nodes) })) }); }
+  if (p === '/api/flows' && m === 'POST') {
+    need('bot.manage'); const sid = siteParam(); const f = flowFields(await readBody(req));
+    return send(res, 200, { id: db.prepare('INSERT INTO flows(site_id,name,keywords,nodes,enabled) VALUES(?,?,?,?,?)').run(sid, f.name, f.keywords, f.nodes, f.enabled).lastInsertRowid });
+  }
+  if ((x = p.match(/^\/api\/flows\/(\d+)$/))) {
+    need('bot.manage'); const sid = siteParam();
+    if (m === 'PUT') { const f = flowFields(await readBody(req)); db.prepare('UPDATE flows SET name=?,keywords=?,nodes=?,enabled=? WHERE id=? AND site_id=?').run(f.name, f.keywords, f.nodes, f.enabled, +x[1], sid); return send(res, 200, {}); }
+    if (m === 'DELETE') { db.prepare('DELETE FROM flows WHERE id=? AND site_id=?').run(+x[1], sid); return send(res, 200, {}); }
+  }
+  if (p === '/api/kb') {
+    const sid = siteParam();
+    if (m === 'GET') return send(res, 200, { kb: db.prepare('SELECT id, question, answer FROM kb WHERE site_id=? ORDER BY id').all(sid) });
+    if (m === 'POST') {
+      need('bot.manage'); const b = await readBody(req); const q = str(b.question, 300), a = str(b.answer, 3000);
+      if (!q || !a) fail(400, 'Question and answer required');
+      db.prepare('INSERT INTO kb(site_id,question,answer) VALUES(?,?,?)').run(sid, q, a); return send(res, 200, {});
+    }
+  }
+  if ((x = p.match(/^\/api\/kb\/(\d+)$/)) && m === 'DELETE') { need('bot.manage'); db.prepare('DELETE FROM kb WHERE id=? AND site_id=?').run(+x[1], siteParam()); return send(res, 200, {}); }
+  if (p === '/api/triggers' && m === 'GET') { const sid = siteParam(); return send(res, 200, { triggers: db.prepare('SELECT * FROM triggers WHERE site_id=? ORDER BY id').all(sid).map(t => ({ ...t, open_chat: !!t.open_chat, enabled: !!t.enabled })) }); }
+  if (p === '/api/triggers' && m === 'POST') {
+    need('bot.manage'); const sid = siteParam(); const t = triggerFields(await readBody(req));
+    return send(res, 200, { id: db.prepare('INSERT INTO triggers(site_id,name,url_contains,delay,message,open_chat,enabled) VALUES(?,?,?,?,?,?,?)').run(sid, t.name, t.url, t.delay, t.message, t.open, t.enabled).lastInsertRowid });
+  }
+  if ((x = p.match(/^\/api\/triggers\/(\d+)$/))) {
+    need('bot.manage'); const sid = siteParam();
+    if (m === 'PUT') { const t = triggerFields(await readBody(req)); db.prepare('UPDATE triggers SET name=?,url_contains=?,delay=?,message=?,open_chat=?,enabled=? WHERE id=? AND site_id=?').run(t.name, t.url, t.delay, t.message, t.open, t.enabled, +x[1], sid); return send(res, 200, {}); }
+    if (m === 'DELETE') { db.prepare('DELETE FROM triggers WHERE id=? AND site_id=?').run(+x[1], sid); return send(res, 200, {}); }
+  }
+  if (p === '/api/rules' && m === 'GET') { const sid = siteParam(); return send(res, 200, { rules: db.prepare('SELECT * FROM rules WHERE site_id=? ORDER BY position, id').all(sid).map(parseRule) }); }
   if (p === '/api/rules' && m === 'POST') {
-    admin(); const b = await readBody(req);
-    const r = ruleFields(b);
-    const pos = db.prepare('SELECT COALESCE(MAX(position),-1)+1 n FROM rules').get().n;
-    const id = db.prepare('INSERT INTO rules(name,keywords,reply,buttons,handoff,enabled,position) VALUES(?,?,?,?,?,?,?)').run(r.name, r.keywords, r.reply, r.buttons, r.handoff, r.enabled, pos).lastInsertRowid;
-    return send(res, 200, { id });
+    need('bot.manage'); const sid = siteParam(); const r = ruleFields(await readBody(req));
+    const pos = db.prepare('SELECT COALESCE(MAX(position),-1)+1 n FROM rules WHERE site_id=?').get(sid).n;
+    return send(res, 200, { id: db.prepare('INSERT INTO rules(site_id,name,keywords,reply,buttons,handoff,enabled,position) VALUES(?,?,?,?,?,?,?,?)').run(sid, r.name, r.keywords, r.reply, r.buttons, r.handoff, r.enabled, pos).lastInsertRowid });
   }
   if ((x = p.match(/^\/api\/rules\/(\d+)$/))) {
-    admin();
-    if (m === 'PUT') {
-      const r = ruleFields(await readBody(req));
-      db.prepare('UPDATE rules SET name=?,keywords=?,reply=?,buttons=?,handoff=?,enabled=? WHERE id=?').run(r.name, r.keywords, r.reply, r.buttons, r.handoff, r.enabled, +x[1]);
-      return send(res, 200, {});
-    }
-    if (m === 'DELETE') { db.prepare('DELETE FROM rules WHERE id=?').run(+x[1]); return send(res, 200, {}); }
+    need('bot.manage'); const sid = siteParam();
+    if (m === 'PUT') { const r = ruleFields(await readBody(req)); db.prepare('UPDATE rules SET name=?,keywords=?,reply=?,buttons=?,handoff=?,enabled=? WHERE id=? AND site_id=?').run(r.name, r.keywords, r.reply, r.buttons, r.handoff, r.enabled, +x[1], sid); return send(res, 200, {}); }
+    if (m === 'DELETE') { db.prepare('DELETE FROM rules WHERE id=? AND site_id=?').run(+x[1], sid); return send(res, 200, {}); }
   }
   if (p === '/api/bot/test' && m === 'POST') {
-    const b = await readBody(req); const r = matchRule(str(b.text, 500));
-    return send(res, 200, { rule: r });
+    const sid = siteParam(); const b = await readBody(req); const text = str(b.text, 500);
+    const flow = matchFlow(sid, text), rule = !flow && matchRule(sid, text), kb = !flow && !rule && matchKb(sid, text);
+    return send(res, 200, { flow: flow ? { name: flow.name } : null, rule: rule || null, kb: kb || null });
   }
-
   if (p === '/api/settings') {
-    if (m === 'GET') return send(res, 200, { settings: getSettings() });
+    const sid = siteParam();
+    if (m === 'GET') return send(res, 200, { settings: getSettings(sid) });
     if (m === 'PUT') {
-      admin(); const b = await readBody(req); delete b.siteKey;
+      const b = await readBody(req);
+      const botKeys = ['botEnabled', 'aiEnabled', 'aiInstructions'];
+      need(Object.keys(b).every(k => botKeys.includes(k)) ? 'bot.manage' : 'settings.manage');
+      if (Object.keys(b).some(k => !botKeys.includes(k))) need('settings.manage');
       if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail(400, 'Color must be a hex value like #4f46e5');
       if (b.position && !['left', 'right'].includes(b.position)) fail(400, 'Bad position');
       if (b.launcherStyle && !['circle', 'pill'].includes(b.launcherStyle)) fail(400, 'Bad launcher style');
@@ -618,35 +782,112 @@ async function apiRoute(req, res, url) {
       if (b.timezone) { try { new Intl.DateTimeFormat('en', { timeZone: b.timezone }); } catch { fail(400, 'Unknown timezone'); } }
       for (const k of ['hoursStart', 'hoursEnd']) if (b[k] && !/^\d\d:\d\d$/.test(b[k])) fail(400, 'Times must look like 09:00');
       if (b.webhookUrl && !/^https?:\/\//.test(b.webhookUrl)) fail(400, 'Webhook URL must start with http(s)://');
-      setSettings(b); return send(res, 200, { settings: getSettings() });
+      setSettings(sid, b); log('settings.updated', `${siteRow(sid).name}: ${Object.keys(b).join(', ')}`);
+      return send(res, 200, { settings: getSettings(sid) });
     }
   }
+  if (p === '/api/mail/test' && m === 'POST') {
+    need('settings.manage');
+    try { await sendMail({ to: me.email, subject: 'Chatly test email', text: 'Email delivery from Chatly is working.' }); } catch (e) { fail(400, e.message); }
+    return send(res, 200, {});
+  }
 
-  if (p === '/api/agents') {
-    if (m === 'GET') return send(res, 200, { agents: db.prepare('SELECT id,name,email,role FROM agents ORDER BY id').all().map(a => ({ ...a, online: [...agentStreams].some(s => s.agentId === a.id) })) });
-    if (m === 'POST') {
-      admin(); const b = await readBody(req);
-      const name = str(b.name, 80), email = str(b.email, 200).toLowerCase(), pw = String(b.password || '');
-      if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail(400, 'Valid name and email required');
-      if (pw.length < 6) fail(400, 'Password must be at least 6 characters');
-      try { db.prepare('INSERT INTO agents(name,email,pass,role,created) VALUES(?,?,?,?,?)').run(name, email, hashPassword(pw), b.role === 'admin' ? 'admin' : 'agent', now()); }
-      catch { fail(409, 'Email already in use'); }
+  // --- team: members ---
+  if (p === '/api/members' && m === 'GET') {
+    const rows = db.prepare('SELECT u.id, u.name, u.email, m.role_id, r.name role, m.site_ids, r.permissions FROM members m JOIN users u ON u.id=m.user_id JOIN roles r ON r.id=m.role_id WHERE m.workspace_id=? ORDER BY u.name').all(ws);
+    const online = new Set([...agentStreams].filter(s => s.ws === ws).map(s => s.userId));
+    return send(res, 200, { members: rows.map(r => ({ id: r.id, name: r.name, email: can('team.manage') ? r.email : undefined, role_id: r.role_id, role: r.role,
+      site_ids: r.site_ids ? JSON.parse(r.site_ids) : null, can_reply: JSON.parse(r.permissions).includes('chats.reply'), online: online.has(r.id) })) });
+  }
+  const assertCanGrant = roleId => {
+    const r = db.prepare('SELECT * FROM roles WHERE id=? AND workspace_id=?').get(roleId, ws);
+    if (!r) fail(400, 'Role not found');
+    if (!isSubset(rolePerms(r.id), ctx.perms)) fail(403, "You can't grant a role with more permissions than your own");
+    return r;
+  };
+  if (p === '/api/members' && m === 'POST') {
+    need('team.manage'); const b = await readBody(req);
+    const email = str(b.email, 200).toLowerCase(), name = str(b.name, 80);
+    if (!EMAIL.test(email)) fail(400, 'A valid email is required');
+    const role = assertCanGrant(bodyId(b.role_id)), siteIds = cleanSiteIds(ws, b.site_ids);
+    let u = db.prepare('SELECT * FROM users WHERE email=?').get(email), created = false;
+    if (!u) {
+      if (!name) fail(400, 'Name is required for a new account');
+      if (String(b.password || '').length < 8) fail(400, 'Temporary password must be at least 8 characters');
+      u = { id: Number(db.prepare('INSERT INTO users(name,email,pass,created) VALUES(?,?,?,?)').run(name, email, hashPassword(String(b.password)), now()).lastInsertRowid), name };
+      created = true;
+    } else if (memberOf(u.id, ws)) fail(409, 'This person is already in the workspace');
+    db.prepare('INSERT INTO members(user_id,workspace_id,role_id,site_ids,created) VALUES(?,?,?,?,?)').run(u.id, ws, role.id, siteIds ? JSON.stringify(siteIds) : null, now());
+    log('member.added', `${email} as ${role.name}`);
+    if (mailConfigured()) sendMail({ to: email, subject: `You've been added to ${db.prepare('SELECT name FROM workspaces WHERE id=?').get(ws).name} on Chatly`,
+      text: `${me.name} added you as ${role.name}. Sign in at the Chatly dashboard with ${email}${created ? ' and the temporary password you were given' : ''}.` }).catch(logMailErr);
+    return send(res, 200, { created });
+  }
+  if ((x = p.match(/^\/api\/members\/(\d+)$/))) {
+    need('team.manage'); const uid = +x[1];
+    const mem = memberOf(uid, ws); if (!mem) fail(404, 'Member not found');
+    if (uid === me.id) fail(400, "You can't change your own access — ask another admin");
+    if (!isSubset(new Set(JSON.parse(mem.permissions)), ctx.perms)) fail(403, 'This person has permissions you do not have, so you cannot change them');
+    const target = db.prepare('SELECT name, email FROM users WHERE id=?').get(uid);
+    const isOwner = db.prepare('SELECT system FROM roles WHERE id=?').get(mem.role_id).system;
+    if (m === 'PUT') {
+      const b = await readBody(req); const role = assertCanGrant(bodyId(b.role_id)); const siteIds = cleanSiteIds(ws, b.site_ids);
+      if (isOwner && !role.system && ownerCount(ws) <= 1) fail(400, 'A workspace needs at least one Owner');
+      db.prepare('UPDATE members SET role_id=?, site_ids=? WHERE user_id=? AND workspace_id=?').run(role.id, siteIds ? JSON.stringify(siteIds) : null, uid, ws);
+      log('member.updated', `${target.email} → ${role.name}${siteIds ? ` (${siteIds.length} sites)` : ''}`); kickUser(uid, ws);
+      return send(res, 200, {});
+    }
+    if (m === 'DELETE') {
+      if (isOwner && ownerCount(ws) <= 1) fail(400, 'A workspace needs at least one Owner');
+      db.prepare('DELETE FROM members WHERE user_id=? AND workspace_id=?').run(uid, ws);
+      db.prepare('UPDATE conversations SET assignee_id=NULL WHERE workspace_id=? AND assignee_id=?').run(ws, uid);
+      db.prepare('UPDATE sessions SET workspace_id=NULL WHERE user_id=? AND workspace_id=?').run(uid, ws);
+      log('member.removed', target.email); kickUser(uid, ws);
       return send(res, 200, {});
     }
   }
-  if ((x = p.match(/^\/api\/agents\/(\d+)$/)) && m === 'DELETE') {
-    admin(); if (+x[1] === me.id) fail(400, "You can't remove yourself");
-    db.prepare('DELETE FROM agents WHERE id=?').run(+x[1]); return send(res, 200, {});
+
+  // --- team: roles ---
+  if (p === '/api/roles' && m === 'GET') {
+    need('team.manage', 'roles.manage');
+    return send(res, 200, { roles: db.prepare('SELECT * FROM roles WHERE workspace_id=? ORDER BY system DESC, id').all(ws).map(roleOut) });
   }
-  if (p === '/api/me/password' && m === 'POST') {
-    const b = await readBody(req); const a = db.prepare('SELECT * FROM agents WHERE id=?').get(me.id);
-    if (!checkPassword(String(b.current || ''), a.pass)) fail(403, 'Current password is wrong');
-    if (String(b.password || '').length < 6) fail(400, 'Password must be at least 6 characters');
-    db.prepare('UPDATE agents SET pass=? WHERE id=?').run(hashPassword(b.password), me.id); return send(res, 200, {});
+  const roleFields = async () => {
+    const b = await readBody(req); const name = str(b.name, 40); if (!name) fail(400, 'Role name is required');
+    const perms = cleanPerms(b.permissions);
+    if (!perms.length) fail(400, 'Pick at least one permission');
+    if (!isSubset(new Set(perms), ctx.perms)) fail(403, "You can't give a role permissions you don't have yourself");
+    if (db.prepare('SELECT 1 FROM roles WHERE workspace_id=? AND lower(name)=lower(?) AND id!=?').get(ws, name, Number(x?.[1]) || 0)) fail(409, 'A role with that name already exists');
+    return { name, perms };
+  };
+  if (p === '/api/roles' && m === 'POST') {
+    need('roles.manage'); const r = await roleFields();
+    const id = db.prepare('INSERT INTO roles(workspace_id,name,permissions) VALUES(?,?,?)').run(ws, r.name, JSON.stringify(r.perms)).lastInsertRowid;
+    log('role.created', r.name); return send(res, 200, { id });
+  }
+  if ((x = p.match(/^\/api\/roles\/(\d+)$/))) {
+    need('roles.manage');
+    const role = db.prepare('SELECT * FROM roles WHERE id=? AND workspace_id=?').get(+x[1], ws); if (!role) fail(404, 'Role not found');
+    if (role.system) fail(400, 'The Owner role always has every permission and cannot be changed');
+    if (!isSubset(rolePerms(role.id), ctx.perms)) fail(403, 'This role has permissions you do not have, so you cannot change it');
+    if (m === 'PUT') {
+      const r = await roleFields();
+      db.prepare('UPDATE roles SET name=?, permissions=? WHERE id=?').run(r.name, JSON.stringify(r.perms), role.id);
+      log('role.updated', `${r.name}: ${r.perms.join(', ')}`);
+      for (const u of db.prepare('SELECT user_id FROM members WHERE role_id=?').all(role.id)) kickUser(u.user_id, ws);
+      return send(res, 200, {});
+    }
+    if (m === 'DELETE') {
+      if (db.prepare('SELECT COUNT(*) n FROM members WHERE role_id=?').get(role.id).n) fail(400, 'Move everyone off this role before deleting it');
+      db.prepare('DELETE FROM roles WHERE id=?').run(role.id); log('role.deleted', role.name); return send(res, 200, {});
+    }
+  }
+  if (p === '/api/audit' && m === 'GET') {
+    need('audit.view');
+    return send(res, 200, { entries: db.prepare('SELECT user_name, action, detail, created FROM audit WHERE workspace_id=? ORDER BY id DESC LIMIT 300').all(ws) });
   }
   fail(404, 'Not found');
 }
-function toVisitorsAll(event, data) { const f = frame(event, data); for (const set of visitorStreams.values()) for (const r of set) r.write(f); }
 function triggerFields(b) {
   const name = str(b.name, 80), message = str(b.message, 500);
   if (!name || !message) fail(400, 'Name and message are required');
@@ -698,7 +939,7 @@ async function serveStatic(req, res, url) {
 export const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
-    if (url.pathname === '/api/site-key') return send(res, 200, { key: getSettings().siteKey }); // demo page only
+    if (url.pathname === '/api/site-key' && process.env.DEMO !== '0') return send(res, 200, { key: db.prepare('SELECT site_key FROM sites ORDER BY id LIMIT 1').get()?.site_key }); // demo page only
     if (url.pathname.startsWith('/api/widget/')) return await widgetRoute(req, res, url);
     if (url.pathname.startsWith('/api/')) return await apiRoute(req, res, url);
     return await serveStatic(req, res, url);

@@ -4,11 +4,18 @@ Zero npm dependencies. Requires Node ≥ 22.13 (uses built-in `node:sqlite`).
 
 ```bash
 npm start            # http://localhost:3000
-npm test             # end-to-end smoke tests
+npm test             # end-to-end + permissions/isolation tests
 ```
 
 - **Demo site** `/` — has the widget installed
-- **Dashboard** `/app/` — default login `admin@example.com` / `admin123` (override with `ADMIN_EMAIL`, `ADMIN_PASSWORD` on first run)
+- **Dashboard** `/app/` — sign up, or use the seeded owner `admin@example.com` / `admin123` (override with `ADMIN_EMAIL`, `ADMIN_PASSWORD` on first run)
+
+## Multi-workspace platform
+- **Self-service sign-up** at `/app/` → every business gets its own **workspace** (fully isolated data), with any number of **websites**, each with its own install key, widget settings, chatbot, flows, knowledge base and triggers.
+- **Roles & permissions**: Owner, Admin, Supervisor, Agent, Viewer + custom roles built from 18 permissions (e.g. `chats.view_all`, `chats.reply`, `chats.assign`, `contacts.export`, `bot.manage`, `settings.manage`, `team.manage`, `roles.manage`, `audit.view`). Teammates can be limited to specific websites.
+- Enforced on the server for every API call **and every realtime event**; no privilege escalation (you can only grant permissions you hold; admins can't touch owners; the last Owner can't be removed). Role changes apply instantly to connected users.
+- One login can belong to several workspaces (agencies) and switch between them; **audit log** of team, role, website and settings changes; install-key rotation.
+- Env: `ALLOW_SIGNUP=0` to disable public sign-up, `DEMO=0` to hide the demo page's key.
 
 ## Features
 - **Embeddable widget** (`/widget.js`, Shadow-DOM isolated): launcher, proactive greeting bubble, quick-reply buttons, typing indicators, unread badge, email capture, persistent visitor identity and history, live page tracking.
@@ -30,3 +37,6 @@ Site key is shown in Settings → Install. Env vars: `PORT`, `DB_FILE` (default 
 
 ## Layout
 `server/` API + SSE realtime + SQLite · `public/widget.js` · `public/app/` dashboard SPA · `test/smoke.mjs`
+
+## Scaling honestly
+This build runs as **one server process with SQLite**; realtime fan-out lives in memory. That comfortably serves many small/medium businesses on one machine, but **not** a million websites. For that scale the next steps are: Postgres instead of SQLite, Redis pub/sub for realtime across many instances, object storage for uploads, and a load balancer — plus billing/plan limits.

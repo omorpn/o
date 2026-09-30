@@ -15,7 +15,9 @@ assert.equal((await j('/api/auth/login', 'POST', { email: 'admin@example.com', p
 const login = await j('/api/auth/login', 'POST', { email: 'admin@example.com', password: 'admin123' });
 assert.equal(login.status, 200);
 const ck = login.headers.get('set-cookie').split(';')[0];
-const { key } = (await j('/api/site-key')).body;
+const ME = (await j('/api/me', 'GET', null, ck)).body; const SITE = ME.sites[0].id; const key = ME.sites[0].site_key;
+assert.equal((await j('/api/site-key')).body.key, key);
+const VK = v => `${SITE}:${v}`;
 
 // agent SSE listener
 const events = [];
@@ -64,12 +66,13 @@ assert.equal((await j('/api/widget/init', 'POST', { key, vid })).body.messages.l
 // identify, validation, admin-only, settings
 assert.equal((await j('/api/widget/identify', 'POST', { key, vid, email: 'bad' })).status, 400);
 assert.equal((await j('/api/widget/identify', 'POST', { key, vid, email: 'a@b.co', name: 'Ann' })).status, 200);
-assert.equal((await j('/api/agents', 'POST', { name: 'Bob', email: 'bob@x.co', password: 'secret1' }, ck)).status, 200);
-const bob = (await j('/api/auth/login', 'POST', { email: 'bob@x.co', password: 'secret1' })).headers.get('set-cookie').split(';')[0];
-assert.equal((await j('/api/settings', 'PUT', { title: 'x' }, bob)).status, 403);
-assert.equal((await j('/api/settings', 'PUT', { title: 'Hey' }, ck)).status, 200);
+const ROLES = (await j('/api/roles', 'GET', null, ck)).body.roles; const roleId = n => ROLES.find(r => r.name === n).id;
+assert.equal((await j('/api/members', 'POST', { name: 'Bob', email: 'bob@x.co', password: 'secret12', role_id: roleId('Agent') }, ck)).status, 200);
+const bob = (await j('/api/auth/login', 'POST', { email: 'bob@x.co', password: 'secret12' })).headers.get('set-cookie').split(';')[0];
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { title: 'x' }, bob)).status, 403);
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { title: 'Hey' }, ck)).status, 200);
 assert.equal((await j('/api/widget/init', 'POST', { key, vid })).body.settings.title, 'Hey');
-assert.equal((await j('/api/bot/test', 'POST', { text: 'shipping cost' }, ck)).status, 200);
+assert.equal((await j(`/api/bot/test?site=${SITE}`, 'POST', { text: 'shipping cost' }, ck)).status, 200);
 assert.equal((await fetch(B + '/widget.js')).status, 200);
 assert.equal((await fetch(B + '/app/')).status, 200);
 assert.equal((await fetch(B + '/..%2f..%2fetc/passwd')).status, 403);
@@ -77,7 +80,7 @@ assert.equal((await fetch(B + '/..%2f..%2fetc/passwd')).status, 403);
 // ---- v2 features ----
 const vid2 = 'vtest2222222222';
 await j('/api/widget/message', 'POST', { key, vid: vid2, body: 'what is your return policy' }); await sleep(1000);
-const c2 = (await j('/api/conversations?status=open', 'GET', null, ck)).body.conversations.find(c => c.visitor.id === vid2);
+const c2 = (await j('/api/conversations?status=open', 'GET', null, ck)).body.conversations.find(c => c.visitor.id === VK(vid2));
 const m2 = (await j('/api/conversations/' + c2.id, 'GET', null, ck)).body.messages;
 assert.match(m2.at(-1).body, /30 days/, 'KB answer');
 // uploads
@@ -97,21 +100,21 @@ assert.equal((await j('/api/widget/rate', 'POST', { key, vid: vid2, rating: 5 })
 const an = (await j('/api/analytics', 'GET', null, ck)).body;
 assert.equal(an.csat, 5); assert.equal(an.days.length, 14); assert.ok(an.avgFirstResponseSec !== null);
 // KB admin, transcript, contacts, hours, webhook validation
-assert.equal((await j('/api/kb', 'POST', { question: 'q?', answer: 'a' }, bob)).status, 403);
-assert.equal((await j('/api/kb', 'POST', { question: 'Do you ship abroad?', answer: 'Yes, worldwide.' }, ck)).status, 200);
+assert.equal((await j(`/api/kb?site=${SITE}`, 'POST', { question: 'q?', answer: 'a' }, bob)).status, 403);
+assert.equal((await j(`/api/kb?site=${SITE}`, 'POST', { question: 'Do you ship abroad?', answer: 'Yes, worldwide.' }, ck)).status, 200);
 const tr = await fetch(B + `/api/conversations/${c2.id}/transcript`, { headers: { cookie: ck } });
 assert.match(await tr.text(), /return policy/);
 assert.match(await (await fetch(B + '/api/export/contacts.csv', { headers: { cookie: ck } })).text(), /a@b\.co/);
-assert.equal((await j('/api/settings', 'PUT', { webhookUrl: 'ftp://x' }, ck)).status, 400);
-assert.equal((await j('/api/settings', 'PUT', { timezone: 'Nope/Zone' }, ck)).status, 400);
-await j('/api/settings', 'PUT', { businessHoursEnabled: true, hoursStart: '00:00', hoursEnd: '00:01', timezone: 'UTC', hoursDays: '' }, ck);
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { webhookUrl: 'ftp://x' }, ck)).status, 400);
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { timezone: 'Nope/Zone' }, ck)).status, 400);
+await j(`/api/settings?site=${SITE}`, 'PUT', { businessHoursEnabled: true, hoursStart: '00:00', hoursEnd: '00:01', timezone: 'UTC', hoursDays: '' }, ck);
 assert.equal((await j('/api/widget/init', 'POST', { key, vid })).body.agentsOnline, false, 'outside business hours');
-await j('/api/settings', 'PUT', { businessHoursEnabled: false }, ck);
+await j(`/api/settings?site=${SITE}`, 'PUT', { businessHoursEnabled: false }, ck);
 
 // ---- flows ----
 const vid3 = 'vflow3333333333';
 const say = async (v, body) => { await j('/api/widget/message', 'POST', { key, vid: v, body }); await sleep(1000); };
-const thread = async v => { const cv = (await j('/api/conversations?status=open', 'GET', null, ck)).body.conversations.find(c => c.visitor.id === v); return { cv, ...(await j('/api/conversations/' + cv.id, 'GET', null, ck)).body }; };
+const thread = async v => { const cv = (await j('/api/conversations?status=open', 'GET', null, ck)).body.conversations.find(c => c.visitor.id === VK(v)); return { cv, ...(await j('/api/conversations/' + cv.id, 'GET', null, ck)).body }; };
 await say(vid3, 'can I get a quote');
 await say(vid3, 'Zed');
 await say(vid3, 'not-an-email');
@@ -126,9 +129,9 @@ t = await thread(vid3);
 assert.equal(t.conversation.needs_human, true); assert.equal(t.conversation.bot_active, false);
 assert.ok(t.messages.some(m => /sales team/.test(m.body)));
 // flow validation
-assert.equal((await j('/api/flows', 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi', next: 'zzz' }] }, ck)).status, 400);
-assert.equal((await j('/api/flows', 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi' }] }, bob)).status, 403);
-assert.equal((await j('/api/flows', 'POST', { name: 'Hours', keywords: 'opening hours', nodes: [{ id: 'a', type: 'message', text: 'We open at 9.' }] }, ck)).status, 200);
+assert.equal((await j(`/api/flows?site=${SITE}`, 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi', next: 'zzz' }] }, ck)).status, 400);
+assert.equal((await j(`/api/flows?site=${SITE}`, 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi' }] }, bob)).status, 403);
+assert.equal((await j(`/api/flows?site=${SITE}`, 'POST', { name: 'Hours', keywords: 'opening hours', nodes: [{ id: 'a', type: 'message', text: 'We open at 9.' }] }, ck)).status, 200);
 await say('vflow4444444444', 'what are your opening hours');
 assert.match((await thread('vflow4444444444')).messages.at(-1).body, /open at 9/);
 
@@ -167,7 +170,7 @@ assert.ok(replyMail && /RCPT TO:<a@b\.co>/.test(replyMail) && bodyOf(replyMail).
 ac.abort(); await sleep(300);
 await say('vflow5555555555', 'talk to a human'); await sleep(400);
 assert.ok(mails.some(m => decodeSubj(m).includes('New message')), 'agent notification');
-await j('/api/settings', 'PUT', { emailTranscript: true }, ck);
+await j(`/api/settings?site=${SITE}`, 'PUT', { emailTranscript: true }, ck);
 await j(`/api/conversations/${tv.cv.id}/status`, 'POST', { status: 'closed' }, ck); await sleep(400);
 assert.ok(mails.some(m => decodeSubj(m).includes('Your conversation')), 'transcript email');
 assert.equal((await j('/api/mail/test', 'POST', {}, bob)).status, 403);
@@ -190,16 +193,16 @@ assert.equal(cd.contact.notes, 'VIP buyer'); assert.ok(cd.conversations.length >
 assert.equal((await j('/api/contacts/nope', 'GET', null, ck)).status, 404);
 const trg = (await j('/api/widget/init', 'POST', { key, vid })).body.settings.triggers;
 assert.ok(trg.some(t => t.url_contains === '/pricing'));
-assert.equal((await j('/api/triggers', 'POST', { name: 'x', message: '' }, ck)).status, 400);
-assert.equal((await j('/api/triggers', 'POST', { name: 'x', message: 'y' }, bob)).status, 403);
-const nt = await j('/api/triggers', 'POST', { name: 'Checkout', url_contains: '/checkout', delay: 5, message: 'Need help checking out?', open_chat: true }, ck);
+assert.equal((await j(`/api/triggers?site=${SITE}`, 'POST', { name: 'x', message: '' }, ck)).status, 400);
+assert.equal((await j(`/api/triggers?site=${SITE}`, 'POST', { name: 'x', message: 'y' }, bob)).status, 403);
+const nt = await j(`/api/triggers?site=${SITE}`, 'POST', { name: 'Checkout', url_contains: '/checkout', delay: 5, message: 'Need help checking out?', open_chat: true }, ck);
 assert.equal(nt.status, 200);
 const vt = 'vtrig77777777777';
 await j('/api/widget/message', 'POST', { key, vid: vt, body: 'yes please', trigger: nt.body.id }); await sleep(300);
 const tt = await thread(vt); assert.match(tt.messages[0].body, /checking out/); assert.equal(tt.messages[0].sender, 'bot');
-assert.equal((await j('/api/triggers/' + nt.body.id, 'DELETE', null, ck)).status, 200);
-assert.equal((await j('/api/settings', 'PUT', { theme: 'neon' }, ck)).status, 400);
-assert.equal((await j('/api/settings', 'PUT', { launcherStyle: 'pill', launcherLabel: 'Help', theme: 'dark', gradient: false, prechatForm: true, avatarUrl: 'https://x.co/a.png' }, ck)).status, 200);
+assert.equal((await j(`/api/triggers/${nt.body.id}?site=${SITE}`, 'DELETE', null, ck)).status, 200);
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { theme: 'neon' }, ck)).status, 400);
+assert.equal((await j(`/api/settings?site=${SITE}`, 'PUT', { launcherStyle: 'pill', launcherLabel: 'Help', theme: 'dark', gradient: false, prechatForm: true, avatarUrl: 'https://x.co/a.png' }, ck)).status, 200);
 const ps = (await j('/api/widget/init', 'POST', { key, vid })).body.settings;
 assert.equal(ps.launcherStyle, 'pill'); assert.equal(ps.prechatForm, true); assert.equal(ps.gradient, false);
 console.log('all smoke tests passed');

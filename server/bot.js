@@ -15,9 +15,9 @@ export function keywordScore(text, keywords) {
   return score;
 }
 
-export function matchFlow(text) {
+export function matchFlow(siteId, text) {
   let best = null, bestScore = 0;
-  for (const f of db.prepare('SELECT * FROM flows WHERE enabled=1 ORDER BY id').all()) {
+  for (const f of db.prepare('SELECT * FROM flows WHERE site_id=? AND enabled=1 ORDER BY id').all(siteId)) {
     const sc = keywordScore(text, f.keywords); if (sc > bestScore) { best = f; bestScore = sc; }
   }
   return best ? { ...best, nodes: JSON.parse(best.nodes) } : null;
@@ -42,11 +42,11 @@ export function validateNodes(nodes) {
 }
 
 /** Returns the best matching enabled rule for a message, or null. */
-export function matchRule(text) {
+export function matchRule(siteId, text) {
   const t = text.toLowerCase().trim();
   if (!t) return null;
   let best = null, bestScore = 0;
-  for (const raw of db.prepare('SELECT * FROM rules WHERE enabled=1 ORDER BY position, id').all()) {
+  for (const raw of db.prepare('SELECT * FROM rules WHERE site_id=? AND enabled=1 ORDER BY position, id').all(siteId)) {
     const score = keywordScore(text, raw.keywords);
     if (score > bestScore) { best = raw; bestScore = score; }
   }
@@ -57,10 +57,10 @@ const STOP = new Set('the a an is are do you i we to of and or for my your what 
 const words = t => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 2 && !STOP.has(w));
 
 /** Knowledge-base lookup by word overlap with the question. */
-export function matchKb(text) {
+export function matchKb(siteId, text) {
   const q = new Set(words(text)); if (!q.size) return null;
   let best = null, bestScore = 0;
-  for (const e of db.prepare('SELECT * FROM kb').all()) {
+  for (const e of db.prepare('SELECT * FROM kb WHERE site_id=?').all(siteId)) {
     const ew = new Set(words(e.question + ' ' + e.question));
     let hit = 0; for (const w of q) if (ew.has(w)) hit++;
     const score = hit / Math.max(q.size, 1);
@@ -70,9 +70,9 @@ export function matchKb(text) {
 }
 
 /** Optional AI answer via the Claude API (needs ANTHROPIC_API_KEY). Returns null on any problem. */
-export async function aiAnswer(history, instructions) {
+export async function aiAnswer(siteId, history, instructions) {
   const key = process.env.ANTHROPIC_API_KEY; if (!key) return null;
-  const kb = db.prepare('SELECT question, answer FROM kb').all().map(e => `Q: ${e.question}\nA: ${e.answer}`).join('\n\n');
+  const kb = db.prepare('SELECT question, answer FROM kb WHERE site_id=?').all(siteId).map(e => `Q: ${e.question}\nA: ${e.answer}`).join('\n\n');
   const system = `${instructions}\n\nAnswer ONLY from the knowledge base below. If you are not sure or the answer is not there, reply exactly: HANDOFF\n\nKnowledge base:\n${kb}`;
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {

@@ -6,6 +6,6 @@
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node --no-warnings server/index.js",
-    "test": "node --no-warnings test/smoke.mjs"
+    "test": "node --no-warnings test/smoke.mjs && node --no-warnings test/rbac.mjs"
   }
 }
