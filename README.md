@@ -31,12 +31,18 @@ npm test             # end-to-end + permissions/isolation tests
 
 ## Install on your site
 ```html
-<script src="https://YOUR-HOST/widget.js" data-key="SITE_KEY" async></script>
+<script src="https://YOUR-HOST/widget.js?key=SITE_KEY" data-key="SITE_KEY" async></script>
 ```
-Site key is shown in Settings → Install. Env vars: `PORT`, `DB_FILE` (default `data/chatly.db`).
+Each website's snippet is in Settings → Websites, which also shows whether the widget has been detected on your site (or why it was blocked) and has a **Test widget** button. Env vars: `PORT`, `DB_FILE` (default `data/chatly.db`).
 
 ## Layout
 `server/` API + SSE realtime + SQLite · `public/widget.js` · `public/app/` dashboard SPA · `test/smoke.mjs`
 
 ## Scaling honestly
 This build runs as **one server process with SQLite**; realtime fan-out lives in memory. That comfortably serves many small/medium businesses on one machine, but **not** a million websites. For that scale the next steps are: Postgres instead of SQLite, Redis pub/sub for realtime across many instances, object storage for uploads, and a load balancer — plus billing/plan limits.
+
+## Widget not showing?
+1. Settings → Websites: the status line says whether the widget was detected, or why it was blocked.
+2. Press **Test widget** — if it works there, the problem is on your site's side.
+3. Open your site's browser console (F12): Chatly logs the exact reason (`[Chatly] Widget not started: …`).
+4. Common causes: the site isn't in **Allowed origins** (Settings → Widget; `*` allows all), an old snippet after the key was rotated, or a strict Content-Security-Policy on your site (allow the Chatly host in `script-src` and `connect-src`).

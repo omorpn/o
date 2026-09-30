@@ -46,5 +46,5 @@ Dashboard: `https://YOUR_PROJECT.web.app/app/` · widget snippet: `<script src="
 
 ## Multi-workspace notes
 - Anyone can sign up at `/app/` and get their own workspace. Set `ALLOW_SIGNUP=0` to make it invite-only.
-- `DEMO=0` hides the demo page at `/` (it would otherwise show the first workspace's widget).
+- `DEMO=0` stops the page at `/` from showing the first workspace's widget. It then works as a test page: open `/?key=YOUR_SITE_KEY`, or press **Test widget** in Settings → Websites.
 - A database created by the older single-workspace version is refused at startup with a clear message; start with a fresh `DB_FILE`.

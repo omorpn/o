@@ -267,20 +267,28 @@ async function saveUpload(b) {
 
 // ---------- widget API (public) ----------
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/** Normalises what people type into "Allowed origins": scheme optional, trailing slash/path ignored, www. optional. */
+const hostOf = v => String(v).trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '').replace(/^www\./, '');
+function originAllowed(allowedList, origin) {
+  if (allowedList.includes('*')) return true;
+  if (!origin || origin === 'null') return false;
+  const host = hostOf(origin);
+  return allowedList.some(a => { const h = hostOf(a); return h === host || (h.startsWith('*.') && (host === h.slice(2) || host.endsWith(h.slice(1)))); });
+}
 function corsFor(req, res, siteId) {
   const allowed = siteId ? getSettings(siteId).allowedOrigins.split(',').map(s => s.trim()).filter(Boolean) : ['*'];
   const origin = req.headers.origin;
-  const ok = allowed.includes('*') || (origin && allowed.includes(origin));
+  const ok = originAllowed(allowed, origin);
   res.setHeader('Vary', 'Origin');
   if (ok) {
-    res.setHeader('Access-Control-Allow-Origin', allowed.includes('*') ? '*' : origin);
+    res.setHeader('Access-Control-Allow-Origin', allowed.includes('*') || !origin ? '*' : origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   }
   return ok;
 }
 const VID = /^[A-Za-z0-9_-]{8,64}$/;
-const siteByKey = key => (typeof key === 'string' && key.length < 80 && db.prepare('SELECT * FROM sites WHERE site_key=?').get(key)) || fail(403, 'Invalid site key');
+const siteByKey = key => (typeof key === 'string' && key.length < 80 && db.prepare('SELECT * FROM sites WHERE site_key=?').get(key)) || fail(403, 'Unknown site key — copy a fresh snippet from Settings → Websites (the key may have been rotated or the website deleted).');
 const publicSettings = (siteId, s) => ({ gradient: s.gradient, launcherStyle: s.launcherStyle, launcherLabel: s.launcherLabel, avatarUrl: s.avatarUrl, theme: s.theme, prechatForm: s.prechatForm, showBranding: s.showBranding,
   triggers: db.prepare('SELECT id,url_contains,delay,message,open_chat FROM triggers WHERE site_id=? AND enabled=1').all(siteId).map(t => ({ ...t, open_chat: !!t.open_chat })), ratingEnabled: s.ratingEnabled,
   title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting, askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
@@ -288,11 +296,18 @@ const publicSettings = (siteId, s) => ({ gradient: s.gradient, launcherStyle: s.
 async function widgetRoute(req, res, url) {
   const route = url.pathname.slice('/api/widget/'.length);
   if (req.method === 'OPTIONS') { corsFor(req, res, null); res.writeHead(204); return res.end(); }
+  res.setHeader('Access-Control-Allow-Origin', '*'); // lets the widget read error messages; corsFor narrows it for allowed requests
   let site, vid, b = {};
   if (route === 'events' && req.method === 'GET') { site = siteByKey(url.searchParams.get('key')); vid = url.searchParams.get('vid'); }
   else if (req.method === 'POST') { b = await readBody(req, route === 'upload' ? 4_500_000 : 200_000); site = siteByKey(b.key); vid = b.vid; }
   else fail(404, 'Not found');
-  if (!corsFor(req, res, site.id)) fail(403, 'Origin not allowed');
+  if (!corsFor(req, res, site.id)) {
+    const o = String(req.headers.origin || 'unknown origin').slice(0, 200);
+    db.prepare('UPDATE sites SET last_error=?, last_error_at=? WHERE id=?').run(`Blocked on ${o}: not in this website's Allowed origins`, now(), site.id);
+    // still answer with CORS headers so the widget can show the reason in the browser console
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    fail(403, `This website (${o}) is not in the Allowed origins for this Chatly site. Add it under Settings → Widget → Allowed origins.`);
+  }
   if (!VID.test(vid || '')) fail(400, 'Invalid visitor id');
   const vkey = `${site.id}:${vid}`, ws = site.workspace_id;
 
@@ -313,10 +328,13 @@ async function widgetRoute(req, res, url) {
     });
     return;
   }
-  limit('w:' + ipOf(req), 120, 60_000);
+  // Per-visitor limit plus a generous per-IP ceiling: mobile carriers and offices put many visitors behind one IP.
+  limit('wv:' + vkey, 120, 60_000);
+  limit('w:' + ipOf(req), 3000, 60_000);
 
   if (route === 'init') {
     const v = upsertVisitor(site, vkey, str(b.page, 500), req);
+    db.prepare('UPDATE sites SET last_seen_at=?, last_origin=? WHERE id=?').run(now(), str(req.headers.origin || '', 200) || str(b.page, 200).replace(/^(https?:\/\/[^/]+).*/, '$1') || null, site.id);
     const conv = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
     const messages = conv ? db.prepare('SELECT * FROM messages WHERE conv_id=? AND sender!=\'note\' ORDER BY id').all(conv.id).map(msgOut) : [];
     emitPresence(v, true);
@@ -402,7 +420,7 @@ const isSubset = (a, b) => [...a].every(p => b.has(p));
 const rolePerms = roleId => new Set(JSON.parse(db.prepare('SELECT permissions FROM roles WHERE id=?').get(roleId)?.permissions || '[]'));
 const ownerCount = ws => db.prepare("SELECT COUNT(*) n FROM members m JOIN roles r ON r.id=m.role_id WHERE m.workspace_id=? AND r.system=1").get(ws).n;
 const roleOut = r => ({ id: r.id, name: r.name, system: !!r.system, permissions: JSON.parse(r.permissions), members: db.prepare('SELECT COUNT(*) n FROM members WHERE role_id=?').get(r.id).n });
-const siteOut = s => ({ id: s.id, name: s.name, domain: s.domain, site_key: s.site_key, created: s.created });
+const siteOut = s => ({ id: s.id, name: s.name, domain: s.domain, site_key: s.site_key, created: s.created, last_seen_at: s.last_seen_at, last_origin: s.last_origin, last_error: s.last_error_at > (s.last_seen_at || 0) ? s.last_error : null, last_error_at: s.last_error_at });
 function cleanSiteIds(ws, list) {
   if (list == null) return null;
   if (!Array.isArray(list)) fail(400, 'site_ids must be a list');

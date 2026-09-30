@@ -2,10 +2,13 @@
    <script src="https://YOUR-HOST/widget.js" data-key="SITE_KEY" async></script> */
 (function () {
   if (window.__chatly) return; window.__chatly = true;
-  var script = document.currentScript || document.querySelector('script[data-key][src*="widget.js"]');
-  var KEY = script && script.getAttribute('data-key');
-  if (!KEY) return console.warn('[Chatly] missing data-key');
-  var BASE = new URL(script.src).origin;
+  // Page builders (GTM, Wix, some Shopify apps) inject scripts dynamically, so currentScript can be null
+  // and data- attributes can be stripped: also accept the key as ?key= in the script URL or window.ChatlyConfig.
+  var script = document.currentScript || document.querySelector('script[src*="widget.js"][data-key]') || document.querySelector('script[src*="widget.js?key="]') || document.querySelector('script[src*="/widget.js"]');
+  var src = script && script.src ? new URL(script.src, location.href) : null;
+  var KEY = (script && script.getAttribute('data-key')) || (src && src.searchParams.get('key')) || (window.ChatlyConfig && window.ChatlyConfig.key);
+  if (!KEY || !src) return console.error('[Chatly] Widget not started: no site key found. Paste the snippet from Chatly → Settings → Websites.');
+  var BASE = (window.ChatlyConfig && window.ChatlyConfig.host) || src.origin;
   var store = function (k, v, session) { try { var s = session ? sessionStorage : localStorage; if (v === undefined) return s.getItem(k); s.setItem(k, v); } catch (e) {} };
   var VID = store('chatly_vid');
   if (!VID) { VID = 'v' + Array.from(crypto.getRandomValues(new Uint8Array(12))).map(function (b) { return b.toString(16).padStart(2, '0'); }).join(''); store('chatly_vid', VID); }
@@ -15,7 +18,7 @@
 
   function api(path, body) {
     return fetch(BASE + '/api/widget/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ key: KEY, vid: VID }, body)) }).then(function (r) { return r.json(); });
+      body: JSON.stringify(Object.assign({ key: KEY, vid: VID }, body)) }).then(function (r) { return r.json().catch(function () { return { error: 'HTTP ' + r.status }; }); });
   }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function shade(hex, amt) { var n = parseInt(hex.slice(1), 16), f = function (v) { return Math.max(0, Math.min(255, Math.round(v + (amt < 0 ? v : 255 - v) * amt))); };
@@ -294,11 +297,12 @@
   }
 
   api('init', { page: location.href }).then(function (r) {
-    if (r.error) return console.warn('[Chatly]', r.error);
+    if (r.error) return console.error('[Chatly] Widget not started: ' + r.error);
     state.settings = r.settings; state.visitor = r.visitor || {}; state.agentsOnline = r.agentsOnline;
     r.messages.forEach(function (m) { state.ids[m.id] = 1; state.messages.push(m); });
     mount(); connect(); track();
-  }).catch(function (e) { console.warn('[Chatly] failed to load', e); });
+    window.Chatly.ready = true; window.dispatchEvent(new CustomEvent('chatly:ready'));
+  }).catch(function (e) { console.error('[Chatly] Widget not started: could not reach ' + BASE + ' (' + e.message + '). Check the server is running and not blocked by an ad blocker or Content-Security-Policy.'); });
 
-  window.Chatly = { open: function () { toggle(true); }, close: function () { toggle(false); } };
+  window.Chatly = { ready: false, open: function () { toggle(true); }, close: function () { toggle(false); } };
 })();

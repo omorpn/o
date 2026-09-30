@@ -155,6 +155,27 @@ const log = (await j('/api/audit', 'GET', null, alice)).body.entries.map(e => e.
 for (const a of ['member.added', 'member.updated', 'member.removed', 'role.created', 'role.updated', 'site.created', 'site.key_rotated', 'site.deleted', 'settings.updated']) assert.ok(log.includes(a), 'audit ' + a);
 assert.equal((await j('/api/audit', 'GET', null, bob)).body.entries.some(e => ['site.key_rotated', 'role.created'].includes(e.action)), false, 'audit is per workspace');
 
+
+// ---- widget install diagnostics & allowed-origins normalisation ----
+const site = (await me(alice)).sites[0];
+const init = (origin, key = site.site_key) => fetch(B + '/api/widget/init', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(origin && { Origin: origin }) }, body: JSON.stringify({ key, vid: 'visitorORIG01' }) });
+assert.equal((await me(alice)).sites[0].last_seen_at > 0, true, 'install detected');
+for (const typed of ['https://myshop.com/', 'myshop.com', 'www.myshop.com', 'HTTPS://MyShop.com/some/page', '*.myshop.com']) {
+  await j(`/api/settings?site=${site.id}`, 'PUT', { allowedOrigins: typed + ', https://other.io' }, alice);
+  assert.equal((await init('https://myshop.com')).status, 200, 'allowed: ' + typed);
+  assert.equal((await init('https://www.myshop.com')).status, 200, 'www allowed: ' + typed);
+}
+await j(`/api/settings?site=${site.id}`, 'PUT', { allowedOrigins: '*.myshop.com' }, alice);
+assert.equal((await init('https://eu.myshop.com')).status, 200, 'wildcard subdomain');
+const blocked = await init('https://evil.example');
+assert.equal(blocked.status, 403);
+assert.equal(blocked.headers.get('access-control-allow-origin'), '*', 'error readable by the widget');
+assert.match((await blocked.json()).error, /evil\.example.*Allowed origins/);
+assert.match((await me(alice)).sites[0].last_error, /evil\.example/, 'dashboard shows why');
+assert.equal((await init('https://myshop.com')).status, 200);
+assert.equal((await me(alice)).sites[0].last_error, null, 'error clears after a good load');
+assert.match((await (await init(null, 'ck_nope')).json()).error, /Unknown site key/);
+await j(`/api/settings?site=${site.id}`, 'PUT', { allowedOrigins: '*' }, alice);
 carlLive.stop(); aliceLive.stop();
 console.log('all rbac tests passed');
 server.closeAllConnections?.(); server.close(); process.exit(0);

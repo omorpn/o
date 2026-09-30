@@ -100,3 +100,5 @@ pre.code{background:#0b1020;color:#e2e8f0;padding:16px;border-radius:12px;overfl
 .permgroup{padding:6px 0}.permgroup b{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin-bottom:2px}.permgroup label.inline{margin:5px 0;font-size:13px;align-items:flex-start}.permgroup input{margin-top:2px}
 .sitepick label.inline{margin:6px 0}
 @media(max-width:900px){.nav .switch{display:none}}
+.note{padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13.5px}.note.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}.note.bad{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}.note.warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+:root[data-theme=dark] .note.ok{background:#052e1f;color:#6ee7b7;border-color:#065f46}:root[data-theme=dark] .note.bad{background:#2d0a0a;color:#fca5a5;border-color:#7f1d1d}:root[data-theme=dark] .note.warn{background:#2a1f05;color:#fcd34d;border-color:#78350f}

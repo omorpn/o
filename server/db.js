@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   workspace_id INTEGER REFERENCES workspaces(id) ON DELETE SET NULL, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, domain TEXT, site_key TEXT NOT NULL UNIQUE, created INTEGER NOT NULL);
+  name TEXT NOT NULL, domain TEXT, site_key TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, last_seen_at INTEGER, last_origin TEXT, last_error TEXT, last_error_at INTEGER);
 CREATE TABLE IF NOT EXISTS site_settings (
   site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (site_id, key));
 CREATE TABLE IF NOT EXISTS visitors (
@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS canned (id INTEGER PRIMARY KEY, workspace_id INTEGER 
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, user_id INTEGER, user_name TEXT, action TEXT NOT NULL, detail TEXT, created INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_audit_ws ON audit(workspace_id, id);
 `);
+
+for (const col of ['last_seen_at INTEGER', 'last_origin TEXT', 'last_error TEXT', 'last_error_at INTEGER']) {
+  try { db.exec(`ALTER TABLE sites ADD COLUMN ${col}`); } catch { /* already exists */ }
+}
 
 export const now = () => Date.now();
 

@@ -1,13 +1,22 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chatly demo store</title>
-<style>body{font:16px/1.6 system-ui,sans-serif;max-width:720px;margin:60px auto;padding:0 20px;color:#111827}a{color:#4f46e5}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}</style></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chatly widget test page</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:720px;margin:60px auto;padding:0 20px;color:#111827}a{color:#4f46e5}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}
+.note{padding:14px 18px;border-radius:12px;margin:18px 0}.ok{background:#ecfdf5;border:1px solid #a7f3d0}.bad{background:#fef2f2;border:1px solid #fecaca}</style></head>
 <body>
-<h1>🛍 Demo Store</h1>
-<p>This page stands in for your website. The chat bubble in the corner is the Chatly widget — try saying “hi”, “pricing” or “talk to a human”.</p>
-<p>Agents reply from the <a href="/app/" target="_blank">dashboard</a> (default login <code>admin@example.com</code> / <code>admin123</code>).</p>
+<h1>🛍 Widget test page</h1>
+<p>This page stands in for your website. The chat bubble in the bottom corner is the Chatly widget — try “hi”, “pricing” or “talk to a human”.</p>
+<div id="status" class="note">Loading widget…</div>
+<p>Reply from the <a href="/app/" target="_blank">dashboard</a>. To test a specific website, open this page as <code>/?key=YOUR_SITE_KEY</code> (Settings → Websites → “Test widget”).</p>
 <script>
-  fetch('/api/site-key').then(r => r.json()).then(d => {
-    var s = document.createElement('script'); s.src = '/widget.js'; s.setAttribute('data-key', d.key); document.body.appendChild(s);
-  });
+  (async () => {
+    const status = document.getElementById('status');
+    let key = new URLSearchParams(location.search).get('key');
+    if (!key) { try { const r = await fetch('/api/site-key'); if (r.ok) key = (await r.json()).key; } catch {} }
+    if (!key) { status.className = 'note bad'; status.innerHTML = 'No site key. The demo key is disabled on this server (<code>DEMO=0</code>), so open this page as <code>/?key=YOUR_SITE_KEY</code> — use the “Test widget” button in Settings → Websites.'; return; }
+    const s = document.createElement('script'); s.src = '/widget.js?key=' + encodeURIComponent(key); s.setAttribute('data-key', key); document.body.appendChild(s);
+    const ok = () => { status.className = 'note ok'; status.textContent = '✅ Widget loaded — look for the bubble in the bottom corner.'; };
+    window.addEventListener('chatly:ready', ok);
+    setTimeout(() => { if (!window.Chatly?.ready) { status.className = 'note bad'; status.textContent = '⚠️ The widget did not start. Open the browser console (F12) — Chatly logs the exact reason, e.g. an unknown key or a blocked origin.'; } }, 8000);
+  })();
 </script>
 </body></html>

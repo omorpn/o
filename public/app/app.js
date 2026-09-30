@@ -436,7 +436,10 @@ async function renderDashboard(main) {
       an.agents.length ? [h('h3', { style: 'margin-top:18px' }, 'Team performance'), h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Teammate'), h('th', {}, 'Chats handled'), h('th', {}, 'Satisfaction'))),
         h('tbody', {}, ...an.agents.map(a => h('tr', {}, h('td', {}, h('div', { class: 'row' }, avEl({ id: a.name, name: a.name }), a.name)), h('td', {}, a.chats), h('td', {}, a.csat == null ? '—' : a.csat + ' / 5')))))] : null); })() : null);
 }
-const snippet = (site = S.sites.find(x => x.id === cfgSite())) => `<script src="${location.origin}/widget.js" data-key="${site?.site_key}" async></script>`;
+const snippet = (site = S.sites.find(x => x.id === cfgSite())) => `<script src="${location.origin}/widget.js?key=${site?.site_key}" data-key="${site?.site_key}" async></script>`;
+const installStatus = site => site.last_error ? h('div', { class: 'note bad' }, '⚠️ ', site.last_error, ` (${ago(site.last_error_at) === 'now' ? 'just now' : ago(site.last_error_at) + ' ago'})`)
+  : site.last_seen_at ? h('div', { class: 'note ok' }, `✅ Widget detected on ${site.last_origin || 'your site'} · last seen ${ago(site.last_seen_at) === 'now' ? 'just now' : ago(site.last_seen_at) + ' ago'}`)
+  : h('div', { class: 'note warn' }, '⏳ Not detected yet. Paste the snippet into your site, open a page, then refresh this screen. Use “Test widget” to check it works here first.');
 /** Website picker shown on pages that configure a single site. */
 const siteBar = () => S.sites.length > 1 ? h('div', { class: 'row', style: 'margin:-6px 0 18px' }, h('span', { class: 'hint', style: 'margin:0' }, 'Website:'),
   h('select', { style: 'width:auto', onchange: e => { S.site = +e.target.value; renderShell(); } }, ...S.sites.map(x => h('option', { value: x.id, selected: x.id === cfgSite() }, x.name)))) : null;
@@ -582,8 +585,10 @@ async function renderSettings(main) {
         manage ? [h('button', { class: 'btn sec sm', onclick: guard(async () => { const n = prompt('Website name', site.name); if (!n) return; const d = prompt('Domain (optional)', site.domain || '') ?? site.domain; await api('/sites/' + site.id, 'PUT', { name: n, domain: d }); await boot(); }) }, 'Rename'),
           h('button', { class: 'btn sec sm', title: 'Issue a new install key. The old snippet stops working immediately.', onclick: guard(async () => { if (!confirm('Rotate the install key? The current snippet will stop working until you replace it.')) return; await api(`/sites/${site.id}/rotate-key`, 'POST'); toast('New key issued'); await boot(); }) }, 'Rotate key'),
           S.sites.length > 1 ? h('button', { class: 'btn danger sm', onclick: guard(async () => { if (prompt(`This permanently deletes "${site.name}" with all its conversations and contacts. Type the website name to confirm.`) !== site.name) return; await api('/sites/' + site.id, 'DELETE'); S.site = 0; await boot(); }) }, 'Delete') : null] : null),
+      installStatus(site),
       h('p', { class: 'hint' }, 'Paste this before </body> on every page of this website:'), h('pre', { class: 'code' }, snippet(site)),
-      h('div', { class: 'row' }, h('button', { class: 'btn sec sm', onclick: () => { navigator.clipboard?.writeText(snippet(site)); toast('Copied'); } }, 'Copy snippet'),
+      h('div', { class: 'row', style: 'flex-wrap:wrap' }, h('button', { class: 'btn sec sm', onclick: () => { navigator.clipboard?.writeText(snippet(site)); toast('Copied'); } }, 'Copy snippet'),
+        h('a', { class: 'btn sec sm', href: '/?key=' + encodeURIComponent(site.site_key), target: '_blank', style: 'text-decoration:none' }, 'Test widget ↗'),
         h('span', { class: 'hint', style: 'margin:0' }, 'Works on any site: WordPress, Shopify, Wix, Webflow, custom HTML. JS API: Chatly.open() / Chatly.close()')))),
       manage ? h('div', { class: 'card' }, h('h3', {}, 'Add a website'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'Name'), nm), h('div', {}, h('label', {}, 'Domain'), dm)),
         h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { const r = await api('/sites', 'POST', { name: nm.value, domain: dm.value }); S.site = r.site.id; toast('Website added with its own chatbot, settings and install code'); await boot(); }) }, icon('plus', 16), 'Add website')) : null);
