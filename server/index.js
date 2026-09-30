@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, now, seed, getSettings, setSettings, hashPassword, checkPassword } from './db.js';
-import { matchRule, parseRule, matchKb, aiAnswer, HUMAN_PHRASE } from './bot.js';
+import { matchRule, parseRule, matchKb, aiAnswer, matchFlow, validateNodes, HUMAN_PHRASE } from './bot.js';
+import { sendMail, mailConfigured } from './mail.js';
 
 seed();
 const UPLOAD_DIR = path.join(path.dirname(process.env.DB_FILE && process.env.DB_FILE !== ':memory:' ? process.env.DB_FILE : path.join(process.cwd(), 'data', 'x')), 'uploads');
@@ -112,12 +113,79 @@ function openConversation(vid) {
   return c;
 }
 
+// ---------- email ----------
+const logMailErr = e => console.error('mail error:', e.message);
+function mailAgents(subject, text) {
+  if (!mailConfigured()) return;
+  for (const a of db.prepare('SELECT email FROM agents').all()) sendMail({ to: a.email, subject, text }).catch(logMailErr);
+}
+function maybeNotify(convId) {
+  const s = getSettings(); if (!mailConfigured() || !s.emailNotifications || agentsOnline() > 0) return;
+  const c = getConv(convId); if (!c || (c.last_notified && now() - c.last_notified < 10 * 60_000)) return;
+  db.prepare('UPDATE conversations SET last_notified=? WHERE id=?').run(now(), convId);
+  const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
+  const last = db.prepare("SELECT body FROM messages WHERE conv_id=? AND sender='visitor' ORDER BY id DESC LIMIT 1").get(convId)?.body || '';
+  mailAgents(`[${s.brandName}] New message from ${v.name || v.email || 'a visitor'}`, `${last}\n\nReply in your dashboard: conversation #${convId}${v.email ? `\nVisitor email: ${v.email}` : ''}`);
+}
+function emailVisitor(convId, subject, text) {
+  if (!mailConfigured()) return;
+  const v = db.prepare('SELECT v.email FROM visitors v JOIN conversations c ON c.visitor_id=v.id WHERE c.id=?').get(convId);
+  if (v?.email) sendMail({ to: v.email, subject, text }).catch(logMailErr);
+}
+function transcriptText(convId) {
+  const c = getConv(convId), v = db.prepare('SELECT * FROM visitors WHERE id=?').get(c.visitor_id);
+  return db.prepare("SELECT * FROM messages WHERE conv_id=? AND sender!='note' ORDER BY id").all(convId)
+    .map(m => `[${new Date(m.created).toISOString()}] ${m.sender === 'visitor' ? (v.name || 'Visitor') : m.sender_name || m.sender}: ${m.body}`).join('\n');
+}
+
+// ---------- flows ----------
+const setFlow = (id, st) => db.prepare('UPDATE conversations SET flow_state=? WHERE id=?').run(st ? JSON.stringify(st) : null, id);
+function runFlow(convId, flow, nodeId) {
+  for (let steps = 0; nodeId && steps < 25; steps++) {
+    const n = flow.nodes.find(x => x.id === nodeId); if (!n || n.type === 'end') break;
+    addMessage(getConv(convId), 'bot', n.text, { senderName: 'Bot', buttons: n.type === 'choice' ? n.options.map(o => o.label) : null });
+    if (n.type === 'choice' || n.type === 'ask') return setFlow(convId, { flow: flow.id, node: n.id });
+    if (n.type === 'handoff') { setFlow(convId, null); return handoff(getConv(convId)); }
+    nodeId = n.next;
+  }
+  setFlow(convId, null);
+}
+/** Consumes the visitor's answer if a flow is waiting on one. Returns true when handled. */
+function flowAnswer(conv, text) {
+  const st = conv.flow_state ? JSON.parse(conv.flow_state) : null; if (!st) return false;
+  const f = db.prepare('SELECT * FROM flows WHERE id=?').get(st.flow);
+  const flow = f && { ...f, nodes: JSON.parse(f.nodes) }, n = flow?.nodes.find(x => x.id === st.node);
+  if (!n) { setFlow(conv.id, null); return false; }
+  if (n.type === 'choice') {
+    const o = n.options.find(x => x.label.toLowerCase() === text.toLowerCase());
+    if (!o) { setFlow(conv.id, null); return false; }
+    runFlow(conv.id, flow, o.next); return true;
+  }
+  if (n.type === 'ask') {
+    const label = n.field;
+    if (n.field === 'email') {
+      const email = text.toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { addMessage(getConv(conv.id), 'bot', "That doesn't look like a valid email — could you try again?", { senderName: 'Bot' }); return true; }
+      db.prepare('UPDATE visitors SET email=? WHERE id=?').run(email, conv.visitor_id);
+      addMessage(getConv(conv.id), 'system', `Visitor shared their email: ${email}`);
+    } else if (n.field === 'name') db.prepare('UPDATE visitors SET name=? WHERE id=?').run(text.slice(0, 100), conv.visitor_id);
+    else addMessage(getConv(conv.id), 'system', `${label === 'phone' ? 'Phone' : 'Answer'}: ${text}`);
+    const v = db.prepare('SELECT * FROM visitors WHERE id=?').get(conv.visitor_id);
+    toAgents('presence', { visitor_id: v.id, online: isOnline(v.id), visitor: visitorOut(v) });
+    if (n.field === 'email') webhook('visitor.identified', visitorOut(v));
+    runFlow(conv.id, flow, n.next); return true;
+  }
+  setFlow(conv.id, null); return false;
+}
+
 function handoff(conv) {
+  setFlow(conv.id, null);
   const s = getSettings(); const online = teamAvailable();
   db.prepare('UPDATE conversations SET bot_active=0, needs_human=1 WHERE id=?').run(conv.id);
   const fresh = getConv(conv.id);
   addMessage(fresh, 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
   toVisitor(conv.visitor_id, 'handoff', { online });
+  maybeNotify(conv.id);
   toAgents('conversation', convOut(getConv(conv.id)));
 }
 
@@ -132,6 +200,9 @@ function botRespond(convId, text) {
       const cur = getConv(convId);
       if (!cur || !cur.bot_active) return;
       if (text.toLowerCase() === HUMAN_PHRASE) return handoff(cur);
+      if (flowAnswer(cur, text)) return;
+      const flow = matchFlow(text);
+      if (flow) return runFlow(convId, flow, flow.nodes[0].id);
       const rule = matchRule(text);
       if (rule) { reply(rule.reply, rule.buttons); if (rule.handoff) handoff(getConv(convId)); return; }
       const kb = matchKb(text);
@@ -238,6 +309,7 @@ async function widgetRoute(req, res, url) {
     const m = addMessage(conv, 'visitor', body);
     webhook('message.created', { conversation_id: conv.id, sender: 'visitor', body, visitor: visitorOut(db.prepare('SELECT * FROM visitors WHERE id=?').get(b.vid)) });
     botRespond(conv.id, body);
+    if (!conv.bot_active) maybeNotify(conv.id);
     return send(res, 200, { message: m });
   }
   if (route === 'upload') {
@@ -303,7 +375,7 @@ async function apiRoute(req, res, url) {
   const admin = () => { if (me.role !== 'admin') fail(403, 'Admins only'); };
   const bodyId = v => { const n = Number(v); if (!Number.isInteger(n)) fail(400, 'Bad id'); return n; };
 
-  if (p === '/api/me') return send(res, 200, { agent: agentOut(me), siteKey: getSettings().siteKey, aiConfigured: !!process.env.ANTHROPIC_API_KEY });
+  if (p === '/api/me') return send(res, 200, { agent: agentOut(me), siteKey: getSettings().siteKey, aiConfigured: !!process.env.ANTHROPIC_API_KEY, mailConfigured: mailConfigured() });
 
   if (p === '/api/events' && m === 'GET') {
     sse(res);
@@ -354,6 +426,7 @@ async function apiRoute(req, res, url) {
         const body = str(b.body, 4000); if (!body) fail(400, 'Empty message');
         db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - c.created, me.id, c.id);
         webhook('message.created', { conversation_id: c.id, sender: 'agent', body });
+        if (getSettings().emailReplies && !isOnline(c.visitor_id)) emailVisitor(c.id, `${getSettings().brandName}: ${me.name} replied to your message`, `${body}\n\n— ${me.name}, ${getSettings().brandName}`);
         return send(res, 200, { message: addMessage(getConv(c.id), 'agent', body, { senderId: me.id, senderName: me.name }) });
       }
       case 'note': {
@@ -370,7 +443,8 @@ async function apiRoute(req, res, url) {
       case 'status': {
         const s = b.status === 'closed' ? 'closed' : 'open';
         db.prepare('UPDATE conversations SET status=?, needs_human=0 WHERE id=?').run(s, c.id);
-        if (s === 'closed') { addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`); toVisitor(c.visitor_id, 'closed', { rating: !!getSettings().ratingEnabled }); webhook('conversation.closed', { conversation_id: c.id }); }
+        if (s === 'closed') { addMessage(getConv(c.id), 'system', `${me.name} closed this conversation`); toVisitor(c.visitor_id, 'closed', { rating: !!getSettings().ratingEnabled });
+          if (getSettings().emailTranscript) emailVisitor(c.id, `Your conversation with ${getSettings().brandName}`, transcriptText(c.id)); webhook('conversation.closed', { conversation_id: c.id }); }
         refresh(); return send(res, 200, {});
       }
       case 'assign': {
@@ -390,6 +464,23 @@ async function apiRoute(req, res, url) {
     const online = [...visitorStreams.keys()];
     const rows = online.length ? db.prepare(`SELECT * FROM visitors WHERE id IN (${online.map(() => '?').join(',')}) ORDER BY last_seen DESC`).all(...online) : [];
     return send(res, 200, { visitors: rows.map(visitorOut) });
+  }
+
+  if (p === '/api/mail/test' && m === 'POST') {
+    admin();
+    try { await sendMail({ to: me.email, subject: 'Chatly test email', text: 'Email delivery from Chatly is working.' }); } catch (e) { fail(400, e.message); }
+    return send(res, 200, {});
+  }
+
+  if (p === '/api/flows' && m === 'GET') return send(res, 200, { flows: db.prepare('SELECT * FROM flows ORDER BY id').all().map(f => ({ ...f, enabled: !!f.enabled, nodes: JSON.parse(f.nodes) })) });
+  if (p === '/api/flows' && m === 'POST') {
+    admin(); const f = flowFields(await readBody(req));
+    return send(res, 200, { id: db.prepare('INSERT INTO flows(name,keywords,nodes,enabled) VALUES(?,?,?,?)').run(f.name, f.keywords, f.nodes, f.enabled).lastInsertRowid });
+  }
+  if ((x = p.match(/^\/api\/flows\/(\d+)$/))) {
+    admin();
+    if (m === 'PUT') { const f = flowFields(await readBody(req)); db.prepare('UPDATE flows SET name=?,keywords=?,nodes=?,enabled=? WHERE id=?').run(f.name, f.keywords, f.nodes, f.enabled, +x[1]); return send(res, 200, {}); }
+    if (m === 'DELETE') { db.prepare('DELETE FROM flows WHERE id=?').run(+x[1]); return send(res, 200, {}); }
   }
 
   if (p === '/api/kb') {
@@ -471,7 +562,7 @@ async function apiRoute(req, res, url) {
       if (b.color && !/^#[0-9a-fA-F]{6}$/.test(b.color)) fail(400, 'Color must be a hex value like #4f46e5');
       if (b.position && !['left', 'right'].includes(b.position)) fail(400, 'Bad position');
       if ('proactiveDelay' in b) b.proactiveDelay = Math.max(0, Math.min(600, Number(b.proactiveDelay) || 0));
-      for (const k of ['askEmail', 'botEnabled', 'proactiveEnabled', 'aiEnabled', 'ratingEnabled', 'businessHoursEnabled']) if (k in b) b[k] = !!b[k];
+      for (const k of ['emailNotifications', 'emailReplies', 'emailTranscript', 'askEmail', 'botEnabled', 'proactiveEnabled', 'aiEnabled', 'ratingEnabled', 'businessHoursEnabled']) if (k in b) b[k] = !!b[k];
       for (const k of ['brandName', 'title', 'subtitle', 'greeting', 'offlineMessage', 'handoffMessage', 'fallbackMessage', 'proactiveMessage', 'allowedOrigins', 'aiInstructions', 'webhookUrl', 'timezone', 'hoursStart', 'hoursEnd', 'hoursDays']) if (k in b) b[k] = str(b[k], 500);
       if (b.timezone) { try { new Intl.DateTimeFormat('en', { timeZone: b.timezone }); } catch { fail(400, 'Unknown timezone'); } }
       for (const k of ['hoursStart', 'hoursEnd']) if (b[k] && !/^\d\d:\d\d$/.test(b[k])) fail(400, 'Times must look like 09:00');
@@ -505,6 +596,15 @@ async function apiRoute(req, res, url) {
   fail(404, 'Not found');
 }
 function toVisitorsAll(event, data) { const f = frame(event, data); for (const set of visitorStreams.values()) for (const r of set) r.write(f); }
+function flowFields(b) {
+  const name = str(b.name, 80), keywords = str(b.keywords, 500);
+  if (!name || !keywords) fail(400, 'Name and trigger keywords are required');
+  const nodes = (Array.isArray(b.nodes) ? b.nodes : []).map(n => ({ id: str(n?.id, 30), type: n?.type, text: str(n?.text, 1000),
+    ...(n?.type === 'ask' ? { field: n.field } : {}), ...(n?.type === 'choice' ? { options: (Array.isArray(n.options) ? n.options : []).map(o => ({ label: str(o?.label, 40), next: str(o?.next, 30) })) } : {}),
+    ...(['message', 'ask'].includes(n?.type) ? { next: str(n.next, 30) } : {}) }));
+  const err = validateNodes(nodes); if (err) fail(400, err);
+  return { name, keywords, nodes: JSON.stringify(nodes), enabled: b.enabled === false ? 0 : 1 };
+}
 function ruleFields(b) {
   const name = str(b.name, 80), keywords = str(b.keywords, 500), reply = str(b.reply, 2000);
   if (!name || !keywords || !reply) fail(400, 'Name, keywords and reply are required');

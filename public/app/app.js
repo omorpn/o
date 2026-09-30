@@ -1,6 +1,6 @@
 (() => {
 const $app = document.getElementById('app');
-const S = { aiConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
+const S = { aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
 let es;
 
 // ---------- utils ----------
@@ -46,7 +46,7 @@ function renderLogin() {
 
 // ---------- shell ----------
 async function boot() {
-  try { const d = await api('/me'); S.me = d.agent; S.siteKey = d.siteKey; S.aiConfigured = d.aiConfigured; } catch { return renderLogin(); }
+  try { const d = await api('/me'); S.me = d.agent; S.siteKey = d.siteKey; S.aiConfigured = d.aiConfigured; S.mailConfigured = d.mailConfigured; } catch { return renderLogin(); }
   if (!S.me) return;
   const [a, c] = await Promise.all([api('/agents'), api('/canned')]);
   S.agents = a.agents; S.canned = c.canned;
@@ -268,13 +268,18 @@ const snippet = () => `<script src="${location.origin}/widget.js" data-key="${S.
 // ---------- chatbot ----------
 async function renderBot(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const [{ rules }, { settings }, { kb }] = await Promise.all([api('/rules'), api('/settings'), api('/kb')]);
+  const [{ rules }, { settings }, { kb }, { flows }] = await Promise.all([api('/rules'), api('/settings'), api('/kb'), api('/flows')]);
   const admin = S.me.role === 'admin';
   page.append(h('h2', {}, 'Chatbot'),
     h('div', { class: 'card' }, h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.botEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { botEnabled: e.target.checked }); toast('Saved'); }) }), 'Enable chatbot for new conversations'),
       h('div', { class: 'hint' }, 'The bot answers with the first rule that matches, and hands over to a human on request. As soon as an agent replies, the bot stops.'),
       h('label', {}, 'Try it'), h('div', { class: 'row' }, h('input', { id: 'bt', placeholder: 'Type a visitor message to test the rules…', class: 'grow' }),
         h('button', { class: 'btn sec', onclick: guard(async () => { const { rule } = await api('/bot/test', 'POST', { text: document.getElementById('bt').value }); document.getElementById('btr').textContent = rule ? `✓ "${rule.name}" → ${rule.reply}` : '✗ No rule matches — fallback message is sent'; }) }, 'Test')), h('div', { class: 'hint', id: 'btr' })),
+    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Flows'), admin ? h('button', { class: 'btn', onclick: () => flowEditor(null) }, '+ New flow') : null),
+      h('div', { class: 'hint' }, 'Guided conversations: the bot asks questions, offers choices, captures name/email and can hand over to a human. A flow starts when its keywords match and takes priority over simple rules.'),
+      ...flows.map(f => h('div', { class: 'row', style: 'padding:10px 0;border-top:1px solid var(--bd)' }, h('div', { class: 'grow' }, h('b', {}, f.name), ' ', f.enabled ? null : h('span', { class: 'pill' }, 'disabled'),
+        h('div', { class: 'hint' }, `Keywords: ${f.keywords} · ${f.nodes.length} steps`)),
+        admin ? [h('button', { class: 'btn sec sm', onclick: () => flowEditor(f) }, 'Edit'), h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm('Delete flow?')) { await api('/flows/' + f.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null))),
     h('div', { class: 'card' }, h('h3', {}, 'AI answers'),
       h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.aiEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { aiEnabled: e.target.checked }); toast('Saved'); }) }), 'Use Claude to answer from the knowledge base when no rule matches'),
       h('div', { class: 'hint' }, S.aiConfigured ? '✓ ANTHROPIC_API_KEY is configured on the server.' : 'Set the ANTHROPIC_API_KEY environment variable on the server to enable this. Without it, the knowledge base still answers by keyword matching.'),
@@ -289,6 +294,38 @@ async function renderBot(main) {
     ...rules.map(r => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, r.name), ' ', r.handoff ? h('span', { class: 'pill warn' }, 'hands off to human') : null, r.enabled ? null : h('span', { class: 'pill' }, 'disabled'),
       h('div', { class: 'hint' }, 'Keywords: ' + r.keywords), h('div', {}, '💬 ' + r.reply), r.buttons.length ? h('div', { class: 'hint' }, 'Buttons: ' + r.buttons.join(' · ')) : null),
       admin ? [h('button', { class: 'btn sec sm', onclick: () => ruleEditor(main, r) }, 'Edit'), h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm('Delete rule?')) { await api('/rules/' + r.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null))));
+}
+function flowEditor(f) {
+  const st = { name: f?.name || '', keywords: f?.keywords || '', enabled: f ? f.enabled : true,
+    nodes: f ? JSON.parse(JSON.stringify(f.nodes)) : [{ id: 'n1', type: 'message', text: 'Hi! Let me help you with that.', next: '' }] };
+  const body = h('div'); const err = h('div', { class: 'err' });
+  const nextSel = (val, onch) => h('select', { onchange: e => onch(e.target.value) }, h('option', { value: '' }, '— end of flow —'), ...st.nodes.map(n => h('option', { value: n.id, selected: n.id === val }, n.id)));
+  const draw = () => {
+    body.replaceChildren(...st.nodes.map((n, i) => h('div', { style: 'border:1px solid var(--bd);border-radius:10px;padding:10px;margin-top:10px;background:#fafafa' },
+      h('div', { class: 'row' }, h('span', { class: 'pill' }, '#' + (i + 1)),
+        h('input', { value: n.id, style: 'width:90px', title: 'Step id', onchange: e => { const old = n.id, nv = e.target.value.trim(); st.nodes.forEach(x => { if (x.next === old) x.next = nv; (x.options || []).forEach(o => { if (o.next === old) o.next = nv; }); }); n.id = nv; draw(); } }),
+        h('select', { style: 'width:auto', onchange: e => { n.type = e.target.value; if (n.type === 'choice' && !n.options) n.options = [{ label: 'Option 1', next: '' }]; if (n.type === 'ask' && !n.field) n.field = 'name'; draw(); } },
+          ...[['message', 'Send message'], ['choice', 'Ask to choose'], ['ask', 'Ask a question'], ['handoff', 'Hand over to human'], ['end', 'End flow']].map(([v, l]) => h('option', { value: v, selected: n.type === v }, l))),
+        h('span', { class: 'grow' }), h('button', { class: 'btn danger sm', disabled: st.nodes.length === 1, onclick: () => { st.nodes.splice(i, 1); draw(); } }, '✕')),
+      n.type !== 'end' ? h('textarea', { rows: 2, style: 'margin-top:6px', placeholder: 'What the bot says', oninput: e => { n.text = e.target.value; } }, n.text || '') : null,
+      n.type === 'ask' ? h('div', { class: 'row', style: 'margin-top:6px' }, 'Save answer as', h('select', { style: 'width:auto', onchange: e => { n.field = e.target.value; } }, ...['name', 'email', 'phone', 'text'].map(v => h('option', { value: v, selected: n.field === v }, v)))) : null,
+      n.type === 'message' || n.type === 'ask' ? h('div', { class: 'row', style: 'margin-top:6px' }, 'Then go to', nextSel(n.next, v => { n.next = v; })) : null,
+      n.type === 'choice' ? h('div', { style: 'margin-top:6px' }, ...(n.options || []).map((o, oi) => h('div', { class: 'row', style: 'margin-bottom:4px' }, h('input', { value: o.label, placeholder: 'Button label', oninput: e => { o.label = e.target.value; } }),
+        '→', nextSel(o.next, v => { o.next = v; }), h('button', { class: 'btn sec sm', onclick: () => { n.options.splice(oi, 1); draw(); } }, '−'))),
+        (n.options || []).length < 6 ? h('button', { class: 'btn sec sm', onclick: () => { n.options.push({ label: '', next: '' }); draw(); } }, '+ option') : null) : null)));
+  };
+  draw();
+  const nm = h('input', { value: st.name, placeholder: 'e.g. Lead capture' }), kw = h('input', { value: st.keywords, placeholder: 'quote, demo, pricing help' }), en = h('input', { type: 'checkbox', checked: st.enabled });
+  const m = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;z-index:5;overflow:auto;padding:30px 10px' },
+    h('div', { class: 'card', style: 'width:640px;max-width:96vw;margin:0' }, h('h3', {}, f ? 'Edit flow' : 'New flow'), h('label', {}, 'Name'), nm, h('label', {}, 'Trigger keywords (comma separated)'), kw,
+      h('label', { class: 'inline' }, en, 'Enabled'), h('label', {}, 'Steps (the flow begins at step #1)'), body,
+      h('button', { class: 'btn sec sm', style: 'margin-top:10px', onclick: () => { let k = st.nodes.length + 1; while (st.nodes.some(n => n.id === 'n' + k)) k++; st.nodes.push({ id: 'n' + k, type: 'message', text: '', next: '' }); draw(); } }, '+ Add step'), err,
+      h('div', { class: 'row', style: 'margin-top:16px;justify-content:flex-end' }, h('button', { class: 'btn sec', onclick: () => m.remove() }, 'Cancel'),
+        h('button', { class: 'btn', onclick: async () => {
+          const payload = { name: nm.value, keywords: kw.value, enabled: en.checked, nodes: st.nodes };
+          try { await (f ? api('/flows/' + f.id, 'PUT', payload) : api('/flows', 'POST', payload)); m.remove(); renderShell(); } catch (e) { err.textContent = e.message; }
+        } }, 'Save flow'))));
+  document.body.append(m);
 }
 function ruleEditor(main, r) {
   const f = { name: h('input', { value: r?.name || '' }), keywords: h('input', { value: r?.keywords || '', placeholder: 'price, pricing, cost' }), reply: h('textarea', { rows: 3 }, r?.reply || ''),
@@ -322,13 +359,17 @@ async function renderSettings(main) {
       h('label', {}, 'Position'), h('select', { id: 's_position', disabled: !admin }, h('option', { value: 'right', selected: s.position === 'right' }, 'Bottom right'), h('option', { value: 'left', selected: s.position === 'left' }, 'Bottom left')),
       ...inp('greeting', 'Welcome message'), ...inp('fallbackMessage', 'Bot fallback message'), ...inp('handoffMessage', 'Handoff message (agents online)'), ...inp('offlineMessage', 'Offline message (no agents online)'),
       chk('askEmail', 'Ask for email when handing over to a human'), chk('ratingEnabled', 'Ask for a satisfaction rating when a chat is closed'), chk('proactiveEnabled', 'Show proactive greeting bubble'), ...inp('proactiveDelay', 'Proactive delay (seconds)', 'number'), ...inp('proactiveMessage', 'Proactive message'),
+      h('h3', { style: 'margin-top:20px' }, 'Email'), h('div', { class: 'hint' }, S.mailConfigured ? '✓ SMTP is configured on the server.' : 'Set SMTP_URL (e.g. smtp://user:pass@smtp.example.com:587) and SMTP_FROM on the server to enable email.'),
+      chk('emailNotifications', 'Email the team when a visitor needs a human and nobody is online'), chk('emailReplies', 'Email the visitor an agent reply when they have left the site'), chk('emailTranscript', 'Email the visitor a transcript when a chat is closed'),
+      admin && S.mailConfigured ? h('button', { class: 'btn sec sm', style: 'margin-top:8px', onclick: guard(async () => { await api('/mail/test', 'POST', {}); toast('Test email sent to ' + S.me.email); }) }, 'Send test email') : null,
+      h('h3', { style: 'margin-top:20px' }, 'Hours & integrations'),
       chk('businessHoursEnabled', 'Only show as online during business hours'), ...inp('hoursStart', 'Opens (HH:MM)'), ...inp('hoursEnd', 'Closes (HH:MM)'),
       ...inp('hoursDays', 'Open days', 'text', 'Comma-separated, 0 = Sunday … 6 = Saturday, e.g. 1,2,3,4,5'), ...inp('timezone', 'Timezone', 'text', 'IANA name, e.g. America/New_York'),
       ...inp('webhookUrl', 'Webhook URL', 'text', 'Receives JSON POSTs for conversation.created, message.created, visitor.identified, conversation.closed, conversation.rated'),
       ...inp('allowedOrigins', 'Allowed origins', 'text', 'Use * for any site, or a comma-separated list like https://shop.com,https://www.shop.com'),
       admin ? h('button', { class: 'btn', style: 'margin-top:16px', onclick: guard(async () => {
         const g = k => { const e = document.getElementById('s_' + k); return e.type === 'checkbox' ? e.checked : e.value; };
-        await api('/settings', 'PUT', Object.fromEntries(['title', 'subtitle', 'brandName', 'color', 'position', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage', 'askEmail', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins', 'ratingEnabled', 'businessHoursEnabled', 'hoursStart', 'hoursEnd', 'hoursDays', 'timezone', 'webhookUrl'].map(k => [k, g(k)])));
+        await api('/settings', 'PUT', Object.fromEntries(['title', 'subtitle', 'brandName', 'color', 'position', 'greeting', 'fallbackMessage', 'handoffMessage', 'offlineMessage', 'askEmail', 'proactiveEnabled', 'proactiveDelay', 'proactiveMessage', 'allowedOrigins', 'ratingEnabled', 'businessHoursEnabled', 'hoursStart', 'hoursEnd', 'hoursDays', 'timezone', 'webhookUrl', 'emailNotifications', 'emailReplies', 'emailTranscript'].map(k => [k, g(k)])));
         toast('Saved — reload the site to see changes');
       }) }, 'Save changes') : h('div', { class: 'hint' }, 'Only admins can change settings.')));
   } else if (settingsTab === 'install') {

@@ -107,5 +107,72 @@ assert.equal((await j('/api/settings', 'PUT', { timezone: 'Nope/Zone' }, ck)).st
 await j('/api/settings', 'PUT', { businessHoursEnabled: true, hoursStart: '00:00', hoursEnd: '00:01', timezone: 'UTC', hoursDays: '' }, ck);
 assert.equal((await j('/api/widget/init', 'POST', { key, vid })).body.agentsOnline, false, 'outside business hours');
 await j('/api/settings', 'PUT', { businessHoursEnabled: false }, ck);
+
+// ---- flows ----
+const vid3 = 'vflow3333333333';
+const say = async (v, body) => { await j('/api/widget/message', 'POST', { key, vid: v, body }); await sleep(1000); };
+const thread = async v => { const cv = (await j('/api/conversations?status=open', 'GET', null, ck)).body.conversations.find(c => c.visitor.id === v); return { cv, ...(await j('/api/conversations/' + cv.id, 'GET', null, ck)).body }; };
+await say(vid3, 'can I get a quote');
+await say(vid3, 'Zed');
+await say(vid3, 'not-an-email');
+let t = await thread(vid3);
+assert.match(t.messages.at(-1).body, /valid email/);
+await say(vid3, 'zed@x.co');
+t = await thread(vid3);
+assert.deepEqual(t.messages.at(-1).buttons, ['Pricing', 'Talk to sales']);
+assert.equal(t.conversation.visitor.name, 'Zed'); assert.equal(t.conversation.visitor.email, 'zed@x.co');
+await say(vid3, 'Talk to sales');
+t = await thread(vid3);
+assert.equal(t.conversation.needs_human, true); assert.equal(t.conversation.bot_active, false);
+assert.ok(t.messages.some(m => /sales team/.test(m.body)));
+// flow validation
+assert.equal((await j('/api/flows', 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi', next: 'zzz' }] }, ck)).status, 400);
+assert.equal((await j('/api/flows', 'POST', { name: 'x', keywords: 'x', nodes: [{ id: 'a', type: 'message', text: 'hi' }] }, bob)).status, 403);
+assert.equal((await j('/api/flows', 'POST', { name: 'Hours', keywords: 'opening hours', nodes: [{ id: 'a', type: 'message', text: 'We open at 9.' }] }, ck)).status, 200);
+await say('vflow4444444444', 'what are your opening hours');
+assert.match((await thread('vflow4444444444')).messages.at(-1).body, /open at 9/);
+
+// ---- email (fake SMTP) ----
+import net from 'node:net';
+const mails = [];
+const smtp = net.createServer(sock => {
+  let data = false, buf = '', cur = '';
+  sock.write('220 fake\r\n');
+  sock.on('data', d => {
+    buf += d;
+    if (data) { if (buf.includes('\r\n.\r\n')) { mails.push(cur + buf); buf = ''; data = false; sock.write('250 queued\r\n'); } return; }
+    let i; while ((i = buf.indexOf('\r\n')) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 2); cur += line + '\n';
+      if (/^EHLO/.test(line)) sock.write('250-fake\r\n250 AUTH PLAIN\r\n');
+      else if (/^AUTH/.test(line)) sock.write('235 ok\r\n');
+      else if (/^(MAIL|RCPT)/.test(line)) sock.write('250 ok\r\n');
+      else if (line === 'DATA') { sock.write('354 go\r\n'); data = true; cur = cur; if (buf) { sock.emit('data', ''); } }
+      else if (line === 'QUIT') sock.end('221 bye\r\n');
+    }
+  });
+});
+await new Promise(r => smtp.listen(0, r));
+process.env.SMTP_URL = `smtp://u:p@127.0.0.1:${smtp.address().port}`; process.env.SMTP_FROM = 'Chatly <noreply@x.co>';
+const decodeSubj = m => Buffer.from((m.match(/Subject: =\?UTF-8\?B\?(.*?)\?=/) || [])[1] || '', 'base64').toString();
+const bodyOf = m => Buffer.from(m.split('\r\n\r\n').pop().replace(/\r\n\.\r\n$/, '').replace(/\s+/g, ''), 'base64').toString();
+assert.equal((await j('/api/mail/test', 'POST', {}, ck)).status, 200);
+assert.equal(mails.length, 1); assert.equal(decodeSubj(mails[0]), 'Chatly test email'); assert.match(mails[0], /RCPT TO:<admin@example\.com>/);
+// agent reply to offline visitor with email -> emailed
+await say(vid, 'hi again');
+const tv = await thread(vid);
+await j(`/api/conversations/${tv.cv.id}/messages`, 'POST', { body: 'Emailed reply body' }, ck); await sleep(400);
+const replyMail = mails.find(m => decodeSubj(m).includes('replied'));
+assert.ok(replyMail && /RCPT TO:<a@b\.co>/.test(replyMail) && bodyOf(replyMail).includes('Emailed reply body'));
+// offline agents + handoff -> agents notified
+ac.abort(); await sleep(300);
+await say('vflow5555555555', 'talk to a human'); await sleep(400);
+assert.ok(mails.some(m => decodeSubj(m).includes('New message')), 'agent notification');
+await j('/api/settings', 'PUT', { emailTranscript: true }, ck);
+await j(`/api/conversations/${tv.cv.id}/status`, 'POST', { status: 'closed' }, ck); await sleep(400);
+assert.ok(mails.some(m => decodeSubj(m).includes('Your conversation')), 'transcript email');
+assert.equal((await j('/api/mail/test', 'POST', {}, bob)).status, 403);
+delete process.env.SMTP_URL;
+assert.equal((await j('/api/mail/test', 'POST', {}, ck)).status, 400);
+smtp.close();
 console.log('all smoke tests passed');
 ac.abort(); server.closeAllConnections?.(); server.close(); process.exit(0);
