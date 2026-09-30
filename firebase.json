@@ -1,0 +1,7 @@
+{
+  "hosting": {
+    "public": "public-static",
+    "ignore": ["**"],
+    "rewrites": [{ "source": "**", "run": { "serviceId": "chatly", "region": "us-central1" } }]
+  }
+}

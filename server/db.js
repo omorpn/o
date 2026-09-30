@@ -6,7 +6,8 @@ import path from 'node:path';
 const file = process.env.DB_FILE || path.join(process.cwd(), 'data', 'chatly.db');
 if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true });
 export const db = new DatabaseSync(file);
-db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+// SQLITE_JOURNAL=delete is required on network filesystems (NFS / GCS FUSE) where WAL is unsafe
+db.exec(`PRAGMA journal_mode = ${process.env.SQLITE_JOURNAL === 'delete' ? 'DELETE' : 'WAL'}; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;`);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS agents (
@@ -100,7 +101,7 @@ export function seed() {
   if (!getSettings().siteKey) setSettings({ siteKey: 'ck_' + randomBytes(9).toString('hex') });
   if (!db.prepare('SELECT 1 FROM agents LIMIT 1').get()) {
     const email = process.env.ADMIN_EMAIL || 'admin@example.com';
-    const pw = process.env.ADMIN_PASSWORD || 'admin123';
+    const pw = process.env.ADMIN_PASSWORD || (process.env.NODE_ENV === 'production' ? randomBytes(9).toString('base64url') : 'admin123');
     db.prepare('INSERT INTO agents(name,email,pass,role,created) VALUES(?,?,?,?,?)')
       .run('Admin', email, hashPassword(pw), 'admin', now());
     console.log(`Created admin account: ${email} / ${pw}  (change it in Settings → Team)`);

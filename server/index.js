@@ -40,7 +40,13 @@ function limit(key, max, windowMs) {
   arr.push(t); hits.set(key, arr);
 }
 setInterval(() => { const t = now(); for (const [k, v] of hits) if (!v.some(x => t - x < 120_000)) hits.delete(k); }, 60_000).unref();
-const ipOf = req => req.socket.remoteAddress || '';
+// TRUST_PROXY = number of proxy hops in front of the app (Cloud Run: 1, Firebase Hosting → Cloud Run: 2)
+const HOPS = Number(process.env.TRUST_PROXY) || 0;
+const ipOf = req => {
+  if (HOPS) { const x = String(req.headers['x-forwarded-for'] || '').split(',').map(v => v.trim()).filter(Boolean); if (x.length >= HOPS) return x[x.length - HOPS]; }
+  return req.socket.remoteAddress || '';
+};
+const secureReq = req => req.socket.encrypted || (HOPS && /https/i.test(String(req.headers['x-forwarded-proto'] || '')));
 
 // ---------- realtime hub ----------
 const agentStreams = new Set();           // { res, agentId }
@@ -362,7 +368,7 @@ async function apiRoute(req, res, url) {
     if (!a || !checkPassword(String(b.password || ''), a.pass)) fail(401, 'Invalid email or password');
     const tok = randomBytes(24).toString('hex');
     db.prepare('INSERT INTO sessions(token,agent_id,created) VALUES(?,?,?)').run(tok, a.id, now());
-    res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}`);
+    res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${secureReq(req) ? '; Secure' : ''}`);
     return send(res, 200, { agent: agentOut(a) });
   }
   const me = authAgent(req);
@@ -656,5 +662,5 @@ const url_isApi = req => (req.url || '').startsWith('/api/');
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 3000;
-  server.listen(port, () => console.log(`Chatly running → http://localhost:${port}  (dashboard: /app, demo site: /)`));
+  server.listen(port, '0.0.0.0', () => console.log(`Chatly running → http://localhost:${port}  (dashboard: /app, demo site: /)`));
 }
