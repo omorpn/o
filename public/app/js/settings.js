@@ -1,5 +1,6 @@
 import { S, ago, api, appendTo, avEl, can, guard, h, icon, toast, mod } from './core.js';
 import { renderNotificationPrefs } from './notifications.js';
+import { renderAccount } from './account.js';
 import { installStatus, siteBar, snippet } from './dashboard.js';
 import { actionPill } from './platform.js';
 import { boot, renderShell } from './shell.js';
@@ -178,11 +179,7 @@ export async function renderSettings(main) {
       h('div', { class: 'card', style: 'max-width:560px' }, h('h3', {}, 'Create another workspace'), h('div', { class: 'hint' }, 'Separate business or client? Each workspace has its own websites, team, roles and data. Switch between them from the top of the sidebar.'),
         h('label', {}, 'Workspace name'), nw, h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/workspaces', 'POST', { name: nw.value }); S.site = 0; await boot(); toast('Workspace created'); }) }, 'Create workspace')));
   } else {
-    const nm = h('input', { value: S.me.name }), cur = h('input', { type: 'password' }), nw = h('input', { type: 'password', placeholder: 'At least 8 characters' });
-    appendTo(page, h('div', { class: 'card', style: 'max-width:460px' }, h('h3', {}, 'Profile'), h('label', {}, 'Name'), nm, h('label', {}, 'Email'), h('input', { value: S.me.email, disabled: true }),
-      h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/me', 'PUT', { name: nm.value }); toast('Saved'); await boot(); }) }, 'Save')),
-      h('div', { class: 'card', style: 'max-width:460px' }, h('h3', {}, 'Change password'), h('div', { class: 'hint' }, 'Signs you out on all other devices.'), h('label', {}, 'Current password'), cur, h('label', {}, 'New password'), nw,
-        h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/me/password', 'POST', { current: cur.value, password: nw.value }); cur.value = nw.value = ''; toast('Password updated'); }) }, 'Update password')));
+    await renderAccount(page);
   }
 }
 

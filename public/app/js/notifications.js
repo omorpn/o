@@ -101,7 +101,7 @@ export async function renderNotificationPrefs(page, { siteBar, canManageSite }) 
         h('label', { class: 'inline' }, qe, 'Enable quiet hours'), h('div', { class: 'grid2' }, h('div', {}, h('label', {}, 'From'), qs), h('div', {}, h('label', {}, 'To'), qn)), h('label', {}, 'Timezone'), tz,
         h('button', { class: 'btn', style: 'margin-top:12px', onclick: guard(async () => { await api('/notifications/prefs', 'PUT', { settings: { quietEnabled: qe.checked, quietStart: qs.value, quietEnd: qn.value, timezone: tz.value || 'UTC' } }); toast('Quiet hours saved'); }) }, 'Save'))),
     canManageSite ? await slaCard(siteBar) : null);
-  function refresh() { page.replaceChildren(); renderNotificationPrefs(page, { siteBar, canManageSite }); }
+  function refresh() { navigate({ link: 'settings/notifications' }); }
 }
 async function slaCard(siteBar) {
   const { settings } = await api('/settings');

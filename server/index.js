@@ -20,6 +20,7 @@ seed();
 
 // Registration order is route precedence. Core first, then features.
 await import('./modules/auth/index.js');
+await import('./modules/auth/security.js');
 await import('./modules/workspace/index.js');
 await import('./modules/livechat/index.js');
 await import('./modules/notifications/index.js');

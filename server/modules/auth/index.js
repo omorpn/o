@@ -9,6 +9,7 @@ import { mailConfigured } from '../../core/mail.js';
 import * as fraud from '../fraud/engine.js';
 import { siteOut } from '../workspace/index.js';
 import { siteRow } from '../livechat/service.js';
+import { logLogin, twoFactorChallenge, sendVerification } from './security.js';
 
 export default defineModule({
   key: 'auth', name: 'Accounts', description: 'Sign-in, sign-up and profiles.', core: true, hidden: true,
@@ -20,9 +21,12 @@ export default defineModule({
       if (guard.locked) fail(429, `${guard.reason}. Try again${guard.retryInSec ? ` in ${Math.ceil(guard.retryInSec / 60)} min` : ' later'}.`);
       limit('login:' + ip, 10, 60_000);
       const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-      if (!u || !checkPassword(String(b.password || ''), u.pass)) { fraud.loginFailed(email, ip); fail(401, 'Invalid email or password'); }
+      if (!u || !checkPassword(String(b.password || ''), u.pass)) { fraud.loginFailed(email, ip); logLogin(c.req, ip, email, u?.id, false, 'wrong_password'); fail(401, 'Invalid email or password'); }
       fraud.loginSucceeded(u, ip);
-      if (u.disabled) fail(403, 'This account has been disabled. Contact support.');
+      if (u.disabled) { logLogin(c.req, ip, email, u.id, false, 'disabled'); fail(403, 'This account has been disabled. Contact support.'); }
+      const ticket = twoFactorChallenge(u, ip);
+      if (ticket) return { twoFactor: true, ticket };
+      logLogin(c.req, ip, email, u.id, true, 'password');
       db.prepare('UPDATE users SET last_login=? WHERE id=?').run(now(), u.id);
       newSession(c.res, c.req, u.id, firstWorkspace(u.id));
       return { ok: true };
@@ -42,7 +46,8 @@ export default defineModule({
         fraud.record({ kind: 'signup', signals, ip, email, summary: `Sign-up blocked: ${name} / ${wsName}` });
         fail(403, "We couldn't create your account. If you think this is a mistake, contact support.");
       }
-      const uid = Number(db.prepare('INSERT INTO users(name,email,pass,created,signup_ip,last_ip) VALUES(?,?,?,?,?,?)').run(name, email, hashPassword(pw), now(), ip, ip).lastInsertRowid);
+      const uid = Number(db.prepare('INSERT INTO users(name,email,pass,created,signup_ip,last_ip,email_verified) VALUES(?,?,?,?,?,?,0)').run(name, email, hashPassword(pw), now(), ip, ip).lastInsertRowid);
+      sendVerification(c.req, { id: uid, name, email });
       const { wsId } = createWorkspace(wsName, uid, str(b.site_name, 80) || 'My website', str(b.domain, 200) || null);
       fraud.record({ kind: 'signup', signals, workspaceId: wsId, userId: uid, ip, email, summary: `New workspace "${wsName}" by ${name}` });
       fraud.maybeAutoSuspend(wsId);
@@ -58,7 +63,8 @@ export default defineModule({
     { method: 'GET', path: '/api/me', auth: 'user', handler: c => {
       const { me, ws, auth } = c;
       const workspaces = db.prepare('SELECT w.id, w.name, r.name role FROM members m JOIN workspaces w ON w.id=m.workspace_id JOIN roles r ON r.id=m.role_id WHERE m.user_id=? ORDER BY w.name').all(me.id);
-      return { user: { id: me.id, name: me.name, email: me.email, platform_role: me.platform_role || null },
+      const sec = db.prepare('SELECT email_verified, totp_enabled FROM users WHERE id=?').get(me.id);
+      return { user: { id: me.id, name: me.name, email: me.email, platform_role: me.platform_role || null, email_verified: !!sec.email_verified, two_factor: !!sec.totp_enabled },
         workspace: ws ? { ...db.prepare('SELECT id, name, plan FROM workspaces WHERE id=?').get(ws), suspended: auth.suspended } : null,
         workspaces, announcement: getPlatform().announcement, role: auth.role, permissions: [...auth.perms], modules: ws ? modulesFor(ws) : [],
         sites: auth.siteIds.map(id => siteOut(siteRow(id))), catalog: PERMISSIONS, aiConfigured: !!process.env.ANTHROPIC_API_KEY, mailConfigured: mailConfigured(), signupEnabled: getPlatform().allowSignup };

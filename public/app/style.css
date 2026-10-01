@@ -126,3 +126,5 @@ table.prefs td,table.prefs th{text-align:center}table.prefs td:first-child,table
 .switch-t input:checked+span{background:var(--pri)}.switch-t input:checked+span::before{transform:translateX(18px)}.switch-t input:focus-visible+span{outline:2px solid var(--pri);outline-offset:2px}
 @media(max-width:900px){.npanel{left:76px}}
 @media(max-width:640px){.npanel{left:10px;top:60px}}
+.announce.warnbar{background:#f59e0b;color:#1f1300}.announce.warnbar a{color:#1f1300;font-weight:700}
+ol.steps{padding-left:20px;line-height:1.8}code.secret{background:var(--panel2);border:1px solid var(--bd);padding:2px 8px;border-radius:6px;font-size:14px;letter-spacing:1px;user-select:all}

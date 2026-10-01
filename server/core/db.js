@@ -72,6 +72,8 @@ for (const [t, col] of [['sites', 'last_seen_at INTEGER'], ['sites', 'last_origi
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already exists */ }
 }
 
+for (const col of ['ip TEXT', 'ua TEXT', 'last_seen INTEGER']) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* exists */ } }
+
 export const now = () => Date.now();
 
 export function hashPassword(pw) {

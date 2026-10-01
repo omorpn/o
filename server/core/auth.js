@@ -2,11 +2,11 @@
 import { randomBytes } from 'node:crypto';
 import { db, now } from './db.js';
 import { ALL as ALL_PERMS } from './rbac.js';
-import { cookies, secureReq, fail } from './http.js';
+import { cookies, secureReq, fail, ipOf, str } from './http.js';
 
 export function newSession(res, req, userId, ws) {
   const tok = randomBytes(24).toString('hex');
-  db.prepare('INSERT INTO sessions(token,user_id,workspace_id,created) VALUES(?,?,?,?)').run(tok, userId, ws, now());
+  db.prepare('INSERT INTO sessions(token,user_id,workspace_id,created,ip,ua,last_seen) VALUES(?,?,?,?,?,?,?)').run(tok, userId, ws, now(), ipOf(req), str(req.headers['user-agent'], 200), now());
   res.setHeader('Set-Cookie', `sid=${tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${secureReq(req) ? '; Secure' : ''}`);
 }
 export const clearSession = res => res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
@@ -21,6 +21,7 @@ export const isSubset = (a, b) => [...a].every(p => b.has(p));
 export function authCtx(req) {
   const tok = cookies(req).sid; if (!tok) return null;
   const sess = db.prepare('SELECT * FROM sessions WHERE token=?').get(tok); if (!sess) return null;
+  if (!sess.last_seen || now() - sess.last_seen > 60_000) db.prepare('UPDATE sessions SET last_seen=?, ip=? WHERE token=?').run(now(), ipOf(req), tok);
   if (now() - sess.created > 30 * 86400_000) { db.prepare('DELETE FROM sessions WHERE token=?').run(tok); return null; }
   const user = db.prepare('SELECT id, name, email, platform_role, disabled FROM users WHERE id=?').get(sess.user_id); if (!user || user.disabled) return null;
   let ws = sess.workspace_id, mem = ws && memberOf(user.id, ws);

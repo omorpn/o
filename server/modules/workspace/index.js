@@ -109,7 +109,7 @@ export default defineModule({
       if (!u) {
         if (!name) fail(400, 'Name is required for a new account');
         if (String(b.password || '').length < 8) fail(400, 'Temporary password must be at least 8 characters');
-        u = { id: Number(db.prepare('INSERT INTO users(name,email,pass,created) VALUES(?,?,?,?)').run(name, email, hashPassword(String(b.password)), now()).lastInsertRowid), name, email };
+        u = { id: Number(db.prepare('INSERT INTO users(name,email,pass,created,email_verified) VALUES(?,?,?,?,0)').run(name, email, hashPassword(String(b.password)), now()).lastInsertRowid), name, email };
         created = true;
       } else if (memberOf(u.id, c.ws)) fail(409, 'This person is already in the workspace');
       db.prepare('INSERT INTO members(user_id,workspace_id,role_id,site_ids,created) VALUES(?,?,?,?,?)').run(u.id, c.ws, role.id, siteIds ? JSON.stringify(siteIds) : null, now());

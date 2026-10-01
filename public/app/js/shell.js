@@ -1,7 +1,7 @@
 import { renderLogin } from './auth.js';
 import { renderBot } from './chatbot.js';
 import { renderContacts } from './contacts.js';
-import { S, api, avEl, can, guard, h, icon, setTheme, mod, $app } from './core.js';
+import { S, api, avEl, can, guard, h, icon, setTheme, mod, toast, $app } from './core.js';
 import { bellButton, loadNotifications, setNavigator, N } from './notifications.js';
 import { renderDashboard } from './dashboard.js';
 import { renderInbox } from './inbox.js';
@@ -45,7 +45,9 @@ export function renderShell() {
     v === 'inbox' && totalUnread() ? h('span', { class: 'cnt' }, totalUnread()) : null);
   const views = { platform: renderPlatform, inbox: renderInbox, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
   const main = h('div', { class: 'main', id: 'main' });
-  const banner = S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null;
+  const banner = [S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null,
+    S.me.email_verified === false ? h('div', { class: 'announce warnbar' }, '✉️ Please confirm your email address — check your inbox. ', h('a', { href: '#', onclick: guard(async e => { e.preventDefault(); await api('/auth/verify/resend', 'POST'); toast('Confirmation email sent to ' + S.me.email); }) }, 'Resend the link')) : null];
+  const flash = sessionStorage.getItem('chatly_flash'); if (flash) { sessionStorage.removeItem('chatly_flash'); setTimeout(() => toast(flash), 300); }
   const dark = document.documentElement.dataset.theme === 'dark';
   $app.replaceChildren(h('div', { class: 'shell' },
     h('div', { class: 'nav' }, h('div', { class: 'brand' }, h('div', { class: 'lg' }, icon('logo')), h('span', {}, 'Chatly')), bellButton(),
