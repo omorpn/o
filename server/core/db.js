@@ -150,7 +150,7 @@ export function setSettings(siteId, patch) {
   for (const [k, v] of Object.entries(patch)) if (k in DEFAULT_SETTINGS) st.run(siteId, k, JSON.stringify(v));
 }
 
-export const PLATFORM_DEFAULTS = { allowSignup: true, announcement: '', plans: 'free,starter,pro,enterprise', fraudMode: 'enforce', reviewThreshold: 40, blockThreshold: 70, autoSuspend: false, autoSuspendThreshold: 250, planModules: {} };
+export const PLATFORM_DEFAULTS = { allowSignup: true, announcement: '', plans: 'free,starter,pro,enterprise', fraudMode: 'enforce', reviewThreshold: 40, blockThreshold: 70, autoSuspend: false, autoSuspendThreshold: 250, planModules: {}, planCatalog: {} };
 export function getPlatform() {
   const out = { ...PLATFORM_DEFAULTS };
   for (const r of db.prepare('SELECT key, value FROM platform_settings').all()) out[r.key] = JSON.parse(r.value);

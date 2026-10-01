@@ -11,6 +11,7 @@ import { renderSettings, openSettingsTab } from './settings.js';
 import { renderTriggers } from './triggers.js';
 import { renderTickets, T } from './tickets.js';
 import { renderKnowledge } from './knowledge.js';
+import { handleBillingReturn } from './billing.js';
 import { renderVisitors } from './visitors.js';
 
 // ---------- shell ----------
@@ -40,6 +41,7 @@ export async function boot() {
   S.members = a.members; S.canned = c.canned; S.departments = dep?.departments || []; S.routing = dep?.routing || null;
   S.views = []; S.viewsLoaded = false; S.view_id = ''; S.selected.clear(); S.f = { priority: '', department: '', assignee: '' };
   connect(); renderShell(); openPendingLink();
+  handleBillingReturn(() => openLink('settings/billing'));
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 }
 export function totalUnread() { let n = 0; for (const c of S.convs.values()) if (c.status === 'open') n += c.unread ? 1 : 0; return n; }

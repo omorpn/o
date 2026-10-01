@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   'analytics.view': 'View reports and analytics',
   'audit.view': 'View the audit log',
   'workspace.manage': 'Rename the workspace',
+  'billing.manage': 'Change the plan, pay and download invoices',
 };
 export const ALL = Object.keys(PERMISSIONS);
 

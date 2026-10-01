@@ -27,6 +27,7 @@ server/
     ├── tickets/          tickets, SLA, history, merge (service.js = domain, index.js = API)
     ├── email/            support mailboxes, inbound email → tickets, threaded replies (parse.js = MIME/provider parsing)
     ├── platform/         operator console, plans × modules                        (core)
+    ├── billing/          plans & prices, Paystack/Flutterwave/Stripe checkout, webhooks, renewals, invoices (core)
     ├── fraud/            risk engine, review queue, blocklists                    (core)
     ├── chatbot/          keyword rules + knowledge base (bot step 20)
     ├── flows/            guided flows engine + API (bot step 10)

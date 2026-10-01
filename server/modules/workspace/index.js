@@ -2,7 +2,7 @@
 import { db, now, hashPassword, createSite, newSiteKey } from '../../core/db.js';
 import { fail, str, EMAIL, toInt } from '../../core/http.js';
 import { emit } from '../../core/events.js';
-import { defineModule, modulesFor, getModule, setEnabled, planAllows } from '../../core/modules.js';
+import { defineModule, modulesFor, getModule, setEnabled, planAllows, planLimit } from '../../core/modules.js';
 import { memberOf, rolePerms, isSubset } from '../../core/auth.js';
 import { ALL as ALL_PERMS, cleanPerms } from '../../core/rbac.js';
 import { agentStreams, kickUser, agentStatus } from '../../core/realtime.js';
@@ -78,6 +78,8 @@ export default defineModule({
     { method: 'GET', path: '/api/sites', auth: 'ws', handler: c => ({ sites: c.auth.siteIds.map(id => siteOut(siteRow(id))) }) },
     { method: 'POST', path: '/api/sites', auth: 'ws', perm: 'sites.manage', handler: async c => {
       const b = await c.body(), name = str(b.name, 80); if (!name) fail(400, 'Website name is required');
+      const maxSites = planLimit(c.ws, 'sites');
+      if (maxSites && db.prepare('SELECT COUNT(*) n FROM sites WHERE workspace_id=?').get(c.ws).n >= maxSites) fail(402, `Your plan includes ${maxSites} website(s). Upgrade under Settings → Billing to add more.`, { limit: 'sites' });
       const id = createSite(c.ws, name, str(b.domain, 200) || null); c.log('site.created', name);
       return { site: siteOut(siteRow(id)) };
     } },
@@ -106,6 +108,8 @@ export default defineModule({
       const b = await c.body(), email = str(b.email, 200).toLowerCase(), name = str(b.name, 80);
       if (!EMAIL.test(email)) fail(400, 'A valid email is required');
       const role = assertCanGrant(c, toInt(b.role_id)), siteIds = cleanSiteIds(c.ws, b.site_ids);
+      const seats = planLimit(c.ws, 'seats');
+      if (seats && db.prepare('SELECT COUNT(*) n FROM members WHERE workspace_id=?').get(c.ws).n >= seats) fail(402, `Your plan includes ${seats} teammate seat(s). Upgrade under Settings → Billing to add more.`, { limit: 'seats' });
       let u = db.prepare('SELECT * FROM users WHERE email=?').get(email), created = false;
       if (!u) {
         if (!name) fail(400, 'Name is required for a new account');

@@ -58,5 +58,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 
 ## Recommended next steps
 
-1. **Billing** with Paystack/Flutterwave (+ Stripe) tied to the existing plans × modules.
-2. **WhatsApp Cloud API** channel (needs a Meta Business account and verified number).
+1. **WhatsApp Cloud API** channel (needs a Meta Business account and verified number).
+
+## Billing (done)
+Paystack, Flutterwave and Stripe checkout; NGN/USD monthly & yearly prices and seat/website limits per plan (Platform → Billing & revenue); payments confirmed with the provider on return and via signed webhooks with amount/currency checks; invoices; Paystack saved-card auto-renewal; reminders, 3-day grace, downgrade to the free plan; cancel/resume; revenue overview. Proration and tax/VAT invoices ⬜.

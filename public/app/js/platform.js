@@ -1,4 +1,5 @@
 import { S, ago, api, appendTo, avEl, guard, h, icon, toast } from './core.js';
+import { renderPlatformBilling } from './billing.js';
 import { debounce } from './inbox.js';
 import { boot, renderShell } from './shell.js';
 
@@ -7,7 +8,7 @@ export let platformTab = 'overview';
 export const openPlatformTab = t => { platformTab = t; };
 export async function renderPlatform(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const TABS = [['overview', 'Overview'], ['fraud', 'Fraud & abuse'], ['workspaces', 'Workspaces'], ['users', 'Users'], ['plans', 'Plans & modules'], ['settings', 'Platform settings'], ['audit', 'Platform audit']];
+  const TABS = [['overview', 'Overview'], ['fraud', 'Fraud & abuse'], ['workspaces', 'Workspaces'], ['users', 'Users'], ['plans', 'Plans & modules'], ['billing', 'Billing & revenue'], ['settings', 'Platform settings'], ['audit', 'Platform audit']];
   appendTo(page, h('h2', {}, '🛡 Platform console'), h('p', { class: 'hint', style: 'margin:-10px 0 16px' }, 'Every workspace on this Chatly server. Only platform admins can see this.'),
     h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: platformTab === k ? 'on' : '', onclick: () => { platformTab = k; renderShell(); } }, l))));
   const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
@@ -56,6 +57,8 @@ export async function renderPlatform(main) {
     appendTo(page, h('div', { class: 'card', style: 'max-width:640px' }, h('label', { class: 'inline' }, su, 'Allow new businesses to sign up'), signupForcedOff ? h('div', { class: 'hint' }, 'Forced off by the ALLOW_SIGNUP=0 environment variable.') : null,
       h('label', {}, 'Announcement banner'), an, h('label', {}, 'Plans (comma separated)'), pl, h('div', { class: 'hint' }, 'Labels you can assign to workspaces. Billing is not connected yet.'),
       h('button', { class: 'btn', style: 'margin-top:14px', onclick: guard(async () => { await api('/platform/settings', 'PUT', { allowSignup: su.checked, announcement: an.value, plans: pl.value }); toast('Saved'); await boot(); }) }, 'Save')));
+  } else if (platformTab === 'billing') {
+    await renderPlatformBilling(page);
   } else if (platformTab === 'plans') {
     const { plans, modules } = await api('/platform/plans');
     appendTo(page, h('p', { class: 'hint', style: 'margin:0 0 14px' }, 'Choose which feature modules each plan includes. Core modules (live chat, inbox, team, notifications) are always included. Rename plans under Platform settings.'),
