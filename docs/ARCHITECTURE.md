@@ -30,7 +30,8 @@ server/
     ├── fraud/            risk engine, review queue, blocklists                    (core)
     ├── chatbot/          keyword rules + knowledge base (bot step 20)
     ├── flows/            guided flows engine + API (bot step 10)
-    ├── ai/               Claude answers from the knowledge base (bot step 40)
+    ├── ai/               Claude answers grounded in knowledge + passages, with citations (bot step 40)
+    ├── knowledge/        sources, crawler, PDF/CSV extraction, FTS5 search, quoted answers (bot step 30), missed questions
     ├── triggers/         proactive messages
     ├── contacts/         contacts, notes, history, CSV export
     ├── analytics/        reports

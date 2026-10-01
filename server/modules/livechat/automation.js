@@ -4,6 +4,7 @@
  */
 import { db, getSettings } from '../../core/db.js';
 import { isEnabled } from '../../core/modules.js';
+import { emit } from '../../core/events.js';
 import { toVisitor } from '../../core/realtime.js';
 import { getConv, addMessage, handoff } from './service.js';
 
@@ -34,7 +35,7 @@ export function botRespond(convId, text) {
         if (!getConv(convId)?.bot_active) return;
         if (await step.run(getConv(convId), text, { settings, reply, db })) return;
       }
-      if (getConv(convId)?.bot_active) reply(settings.fallbackMessage, ['Talk to a human']);
+      if (getConv(convId)?.bot_active) { reply(settings.fallbackMessage, ['Talk to a human']); emit('bot.unanswered', { conv: getConv(convId), text }); }
     } catch (e) { console.error('bot error', e); }
   }, 700);
 }

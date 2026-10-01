@@ -10,6 +10,7 @@ import { connect } from './realtime.js';
 import { renderSettings, openSettingsTab } from './settings.js';
 import { renderTriggers } from './triggers.js';
 import { renderTickets, T } from './tickets.js';
+import { renderKnowledge } from './knowledge.js';
 import { renderVisitors } from './visitors.js';
 
 // ---------- shell ----------
@@ -45,7 +46,7 @@ export function totalUnread() { let n = 0; for (const c of S.convs.values()) if 
 export function renderShell() {
   const link = (v, ic, label) => h('a', { 'data-v': v, class: S.view === v ? 'on' : '', onclick: () => { S.view = v; renderShell(); } }, icon(ic), h('span', { class: 'lbl' }, label),
     v === 'inbox' && totalUnread() ? h('span', { class: 'cnt' }, totalUnread()) : null);
-  const views = { platform: renderPlatform, inbox: renderInbox, tickets: renderTickets, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
+  const views = { platform: renderPlatform, inbox: renderInbox, tickets: renderTickets, knowledge: renderKnowledge, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
   const main = h('div', { class: 'main', id: 'main' });
   const banner = [S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null,
     S.me.email_verified === false ? h('div', { class: 'announce warnbar' }, '✉️ Please confirm your email address — check your inbox. ', h('a', { href: '#', onclick: guard(async e => { e.preventDefault(); await api('/auth/verify/resend', 'POST'); toast('Confirmation email sent to ' + S.me.email); }) }, 'Resend the link')) : null];
@@ -60,8 +61,8 @@ export function renderShell() {
       S.workspace && can('chats.view') ? [link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox')] : null,
       S.workspace && can('tickets.view') && mod('tickets') ? link('tickets', 'ticket', 'Tickets') : null,
       can('contacts.view') || can('chats.view') ? h('div', { class: 'sec' }, 'People') : null, can('contacts.view') && mod('contacts') ? link('contacts', 'users', 'Contacts') : null, can('chats.view') ? link('visitors', 'eye', 'Live visitors') : null,
-      can('bot.manage') && (mod('chatbot') || mod('flows') || mod('ai') || mod('triggers')) ? [h('div', { class: 'sec' }, 'Automation'),
-        mod('chatbot') || mod('flows') || mod('ai') ? link('bot', 'bot', 'Chatbot & flows') : null, mod('triggers') ? link('triggers', 'zap', 'Triggers') : null] : null,
+      can('bot.manage') && (mod('chatbot') || mod('flows') || mod('ai') || mod('triggers') || mod('knowledge')) ? [h('div', { class: 'sec' }, 'Automation'),
+        mod('chatbot') || mod('flows') || mod('ai') ? link('bot', 'bot', 'Chatbot & flows') : null, mod('knowledge') ? link('knowledge', 'book', 'AI knowledge') : null, mod('triggers') ? link('triggers', 'zap', 'Triggers') : null] : null,
       S.workspace ? [h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings')] : null,
       S.me.platform_role === 'superadmin' ? [h('div', { class: 'sec' }, 'Platform'), link('platform', 'shield', 'Platform console')] : null,
       h('a', { onclick: () => { setTheme(dark ? 'light' : 'dark'); renderShell(); } }, icon(dark ? 'sun' : 'moon'), h('span', { class: 'lbl' }, dark ? 'Light mode' : 'Dark mode')),
@@ -95,7 +96,7 @@ export async function openLink(link, wsId) {
   if (wsId && wsId !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: wsId }).catch(() => {}); await boot(); }
   if (view === 'platform') { openPlatformTab(a || 'overview'); S.view = 'platform'; }
   else if (view === 'settings') { openSettingsTab(a || 'widget'); S.view = 'settings'; }
-  else S.view = ['dashboard', 'contacts', 'visitors', 'bot', 'triggers'].includes(view) ? view : 'dashboard';
+  else S.view = ['dashboard', 'contacts', 'visitors', 'bot', 'triggers', 'knowledge', 'tickets'].includes(view) ? view : 'dashboard';
   renderShell();
 }
 setNavigator(n => openLink(n.link, n.workspace_id));

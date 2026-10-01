@@ -32,6 +32,7 @@ await import('./modules/fraud/index.js');
 await import('./modules/flows/index.js');
 await import('./modules/chatbot/index.js');
 await import('./modules/ai/index.js');
+await import('./modules/knowledge/index.js');
 await import('./modules/triggers/index.js');
 await import('./modules/contacts/index.js');
 await import('./modules/analytics/index.js');

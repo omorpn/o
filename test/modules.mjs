@@ -56,7 +56,7 @@ assert.doesNotMatch((await thread('visitorMOD0002')).messages.at(-1).body, /set 
 await j('/api/widget/message', 'POST', { key, vid: 'visitorMOD0003', body: 'what are your prices' }); await sleep(900);
 assert.match((await thread('visitorMOD0003')).messages.at(-1).body, /\$19/, 'rule still answers');
 // all automation off → conversation goes straight to the team, no bot reply
-await j('/api/modules/chatbot', 'PUT', { enabled: false }, owner); await j('/api/modules/ai', 'PUT', { enabled: false }, owner);
+await j('/api/modules/chatbot', 'PUT', { enabled: false }, owner); await j('/api/modules/ai', 'PUT', { enabled: false }, owner); await j('/api/modules/knowledge', 'PUT', { enabled: false }, owner);
 await j('/api/widget/message', 'POST', { key, vid: 'visitorMOD0004', body: 'hello' }); await sleep(900);
 const t4 = await thread('visitorMOD0004');
 assert.equal(t4.conversation.bot_active, false); assert.deepEqual(t4.messages.map(m => m.sender), ['visitor']);

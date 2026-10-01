@@ -10,7 +10,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 | 1 — Foundation | multi-tenant accounts, auth, users, roles, permissions, workspace, website install, live chat, unified inbox, contacts | ✅ (gap: organizations above workspaces) |
 | 2 — Support | tickets, ticket assignment, departments, tags, internal notes, macros, search, customer history, email, notifications | 🟡 tickets, departments, tags, notes, saved replies, search, history, notifications ✅ · inbound email ✅ · macros ⬜ |
 | 3 — Automation | flow builder, triggers, conditions, actions, forms, webhooks, lead capture, surveys, routing, templates | 🟡 step flows, URL/delay triggers, webhooks, lead capture, CSAT ✅ · visual canvas, conditions, flow actions, templates, routing ⬜ |
-| 4 — AI | AI agent, knowledge base, crawler, PDF/CSV knowledge, guidance, playground, missed questions, handoff, AI analytics | 🟡 Claude answers from Q&A knowledge + handoff ✅ · crawler, documents, guidance, playground, missed questions, AI analytics ⬜ |
+| 4 — AI | AI agent, knowledge base, crawler, PDF/CSV knowledge, guidance, playground, missed questions, handoff, AI analytics | 🟡 Claude answers grounded in Q&A + crawled pages/sitemaps/PDF/CSV/text with citations, extractive answers without a key, handoff, playground, missed questions, AI analytics ✅ · AI actions, copilot, guidance library ⬜ |
 | 5 — Ecommerce | products, inventory, orders, cart, recommendations, order/shipping lookup, discounts, refunds, attribution | ⬜ |
 | 6 — Omnichannel | WhatsApp, Instagram, Messenger, email, channel routing, unified history | ⬜ (needs Meta Business / WhatsApp Cloud API accounts) |
 | 7 — Advanced AI | AI actions, OpenAPI, MCP, external APIs, tool permissions, action logs, memory, copilot | ⬜ |
@@ -32,7 +32,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 | 8 | Contact / mini CRM | 🟡 | Records, name/email, notes, history, search, export ✅. Phone, location, contact tags, custom properties, lead/customer status, purchases ⬜ |
 | 9–10 | Ticketing | ✅ | Manual + from-chat tickets, per-workspace numbering, open/pending/solved/closed, priority, assignee, department, tags, custom fields (text/number/dropdown/checkbox), first-response + resolution SLA per priority with breach alerts, auto-close, reopen, public replies + internal notes, merge, full change history, requester's other tickets, bulk actions, realtime, webhooks, 4 ticket permissions. Macros, ticket forms for customers ⬜ |
 | 11 | Email channel | ✅ | Support mailboxes with a private inbound URL (Postmark, Mailgun, SendGrid, Cloudflare Email Workers, raw MIME, JSON), email → ticket with attachments, threading by Message-ID / In-Reply-To / [#n], quoted-text stripping, reopen on reply, follow-up tickets for closed ones, auto-acknowledgement, signatures, Reply-To, loop/duplicate/auto-reply/blocklist protection, send-failure notes. IMAP polling, HTML email, CC handling ⬜ |
-| 12–21 | AI agent, knowledge, playground, guidance, actions, handoff, missed questions, copilot | 🟡 | AI answers grounded in knowledge Q&A with handoff ✅; everything else ⬜ |
+| 12–21 | AI agent, knowledge, playground, guidance, actions, handoff, missed questions, copilot | 🟡 | Knowledge sources (website crawler with robots.txt + SSRF guard, sitemaps, PDF, CSV, TXT/MD, pasted text; weekly re-crawl), FTS5/BM25 retrieval, Claude answers with source citations and HANDOFF when unsure, quoted answers without an AI key, missed-question review → Q&A, playground showing which step answers and why, answer-rate / resolved-without-human stats ✅. AI actions (order lookup etc.), agent copilot, per-topic guidance ⬜ |
 | 22–26 | Flows | 🟡 | Step flows (message, choice, question → name/email/phone, handoff, end), keyword trigger ✅. Visual canvas, conditions, delays, API/webhook nodes, templates, analytics ⬜ |
 | 27–29 | Leads, sales, ecommerce | ⬜ | Lead capture via flows only |
 | 30–33 | Social channels | ⬜ | Requires Meta app review + WhatsApp Business account |
@@ -58,6 +58,5 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 
 ## Recommended next steps
 
-1. **AI knowledge**: website crawler + PDF/CSV sources, missed-question review, AI playground.
-2. **Billing** with Paystack/Flutterwave (+ Stripe) tied to the existing plans × modules.
-3. **WhatsApp Cloud API** channel (needs a Meta Business account and verified number).
+1. **Billing** with Paystack/Flutterwave (+ Stripe) tied to the existing plans × modules.
+2. **WhatsApp Cloud API** channel (needs a Meta Business account and verified number).

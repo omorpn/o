@@ -18,7 +18,7 @@ export function h(tag, attrs, ...kids) {
   for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
   return e;
 }
-export const CFG_PATHS = /^\/(settings|rules|kb|flows|triggers|bot\/test)(\/|$|\?)/, DATA_PATHS = /^\/(stats|analytics|conversations|contacts|visitors|export\/contacts\.csv)(\?|$)/;
+export const CFG_PATHS = /^\/(settings|rules|kb|flows|triggers|bot\/test|knowledge)(\/|$|\?)/, DATA_PATHS = /^\/(stats|analytics|conversations|contacts|visitors|export\/contacts\.csv)(\?|$)/;
 export const cfgSite = () => S.site || S.sites[0]?.id;
 export const withSite = path => {
   const add = CFG_PATHS.test(path) ? cfgSite() : DATA_PATHS.test(path) && S.site ? S.site : null;
@@ -62,6 +62,7 @@ export const ICONS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>',
   ticket: '<path d="M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a2 2 0 0 0 0 4v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 0 0-4z"/><path d="M13 5v2M13 11v2M13 17v2"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 };
 export const icon = (n, size) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', 'i'); if (size) { s.style.width = s.style.height = size + 'px'; } s.innerHTML = ICONS[n] || ''; return s; };
