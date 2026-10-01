@@ -1,4 +1,4 @@
-import { S, ago, api, avEl, can, guard, h, icon, toast, vname } from './core.js';
+import { S, ago, api, avEl, can, guard, h, icon, mod, toast, vname } from './core.js';
 import { refreshNavBadge, renderShell } from './shell.js';
 
 // ---------- inbox ----------
@@ -6,6 +6,7 @@ export async function loadConvs() {
   const p = new URLSearchParams();
   if (S.filter === 'closed') p.set('status', 'closed'); else { p.set('status', 'open'); if (S.filter !== 'open') p.set('filter', S.filter); }
   if (S.q) p.set('q', S.q);
+  for (const [k, v] of Object.entries(S.f)) if (v) p.set(k, v);
   if (S.tag) p.set('tag', S.tag);
   const d = await api('/conversations?' + p);
   S.convs = new Map(d.conversations.map(c => [c.id, c]));
@@ -14,38 +15,111 @@ export async function loadConvs() {
 export function visibleConvs() {
   return [...S.convs.values()].filter(c => {
     if (S.tag && !(c.tags || []).includes(S.tag)) return false;
+    if (S.f.priority && c.priority !== S.f.priority) return false;
+    if (S.f.department && String(c.department_id ?? 'none') !== S.f.department) return false;
+    if (S.f.assignee && String(c.assignee_id ?? 'none') !== S.f.assignee) return false;
     if (S.filter === 'closed') return c.status === 'closed';
     if (c.status !== 'open') return false;
+    if (S.filter === 'snoozed') return !!c.snoozed_until;
+    if (c.snoozed_until) return false;
     if (S.filter === 'mine') return c.assignee_id === S.me.id;
     if (S.filter === 'unassigned') return !c.assignee_id;
     if (S.filter === 'human') return c.needs_human;
     return true;
-  }).sort((a, b) => (b.needs_human - a.needs_human) || b.updated - a.updated);
+  }).sort((a, b) => (b.needs_human - a.needs_human) || (PRANK[b.priority] - PRANK[a.priority]) || b.updated - a.updated);
 }
+const PRANK = { urgent: 3, high: 2, normal: 1, low: 0 };
+export const PRIORITY = { urgent: ['🔴', 'Urgent'], high: ['🟠', 'High'], normal: ['', 'Normal'], low: ['⚪', 'Low'] };
+const sel = (value, onchange, ...opts) => h('select', { class: 'sm', onchange: e => onchange(e.target.value) }, ...opts.map(([v, l]) => h('option', { value: v, selected: String(v) === String(value) }, l)));
+const setF = (k, v) => { S.f[k] = v; S.view_id = ''; renderShell(); };
+
+function filterBar() {
+  const deps = mod('departments') ? S.departments : [];
+  return h('div', { class: 'filters fbar' },
+    sel(S.f.priority, v => setF('priority', v), ['', 'Any priority'], ...Object.entries(PRIORITY).reverse().map(([k, [e, l]]) => [k, `${e} ${l}`.trim()])),
+    deps.length ? sel(S.f.department, v => setF('department', v), ['', 'All departments'], ...deps.map(d => [d.id, d.name]), ['none', 'No department']) : null,
+    can('chats.view_all') ? sel(S.f.assignee, v => setF('assignee', v), ['', 'Anyone'], ['none', 'Unassigned'], ...S.members.filter(m => m.can_reply).map(m => [m.id, m.name])) : null,
+    viewsMenu());
+}
+/** Saved views: personal or shared filter presets. */
+function viewsMenu() {
+  const apply = id => {
+    if (id === '__save') return saveView();
+    const v = S.views.find(x => String(x.id) === id); S.view_id = id;
+    if (!v) { S.f = { priority: '', department: '', assignee: '' }; S.filter = 'open'; S.q = ''; S.tag = ''; return renderShell(); }
+    const f = v.filters; S.filter = f.status === 'closed' ? 'closed' : f.filter || 'open'; S.q = f.q || ''; S.tag = f.tag || '';
+    S.f = { priority: f.priority || '', department: f.department || '', assignee: f.assignee || '' }; renderShell();
+  };
+  const cur = S.views.find(v => String(v.id) === S.view_id);
+  return h('span', { class: 'row', style: 'gap:4px;margin-left:auto' },
+    sel(S.view_id || '', apply, ['', S.view_id ? '— Clear view —' : '📑 Views'], ...S.views.map(v => [v.id, (v.shared ? '👥 ' : '') + v.name]), ['__save', '+ Save current filters…']),
+    cur && (cur.mine || can('settings.manage')) ? h('button', { class: 'btn sec sm', title: 'Delete this view', onclick: guard(async () => { if (!confirm(`Delete the view "${cur.name}"?`)) return; await api('/inbox/views/' + cur.id, 'DELETE'); S.view_id = ''; await loadViews(); renderShell(); }) }, '×') : null);
+}
+const saveView = guard(async () => {
+  const name = prompt('Name this view (e.g. "Urgent sales chats")'); if (!name) return renderShell();
+  const shared = can('settings.manage') && confirm('Share this view with the whole team?\n\nOK = shared, Cancel = only me');
+  const r = await api('/inbox/views', 'POST', { name, shared, filters: { status: S.filter === 'closed' ? 'closed' : 'open', filter: ['open', 'closed'].includes(S.filter) ? '' : S.filter, q: S.q, tag: S.tag, ...S.f } });
+  await loadViews(); S.view_id = String(r.id); toast('View saved'); renderShell();
+});
+export async function loadViews() { S.views = (await api('/inbox/views').catch(() => ({ views: [] }))).views; }
+
+/** Bulk bar shown while conversations are ticked. */
+function bulkBar() {
+  const n = S.selected.size; if (!n) return null;
+  const run = (action, value) => guard(async () => {
+    if (action === 'delete' && !confirm(`Delete ${n} conversation(s) permanently?`)) return;
+    const r = await api('/conversations/bulk', 'POST', { ids: [...S.selected], action, value });
+    toast(`Updated ${r.updated} conversation(s)${r.errors?.length ? ` · ${r.errors.length} skipped` : ''}`); S.selected.clear(); await loadConvs(); renderShell();
+  })();
+  return h('div', { class: 'bulk' }, h('b', {}, `${n} selected`),
+    can('chats.close') ? h('button', { class: 'btn sec sm', onclick: () => run(S.filter === 'closed' ? 'reopen' : 'close') }, S.filter === 'closed' ? 'Reopen' : '✓ Close') : null,
+    h('button', { class: 'btn sec sm', onclick: () => run('read') }, 'Mark read'),
+    can('chats.reply') ? sel('', v => v && run('priority', v), ['', 'Priority…'], ...Object.entries(PRIORITY).map(([k, [e, l]]) => [k, `${e} ${l}`.trim()])) : null,
+    can('chats.assign') ? sel('', v => v && run('assign', v === 'none' ? null : +v), ['', 'Assign…'], ['none', 'Unassigned'], ...S.members.filter(m => m.can_reply).map(m => [m.id, m.name])) : null,
+    can('chats.assign') && mod('departments') && S.departments.length ? sel('', v => v && run('department', v === 'none' ? null : +v), ['', 'Department…'], ...S.departments.map(d => [d.id, d.name]), ['none', 'No department']) : null,
+    can('chats.reply') ? h('button', { class: 'btn sec sm', onclick: () => { const t = prompt('Tag to add'); if (t) run('tag', t); } }, '+ Tag') : null,
+    can('chats.reply') ? sel('', v => v && run(v === 'wake' ? 'unsnooze' : 'snooze', v === 'wake' ? null : snoozeUntil(v)), ['', 'Snooze…'], ...SNOOZE, ['wake', 'Unsnooze']) : null,
+    can('chats.delete') ? h('button', { class: 'btn danger sm', onclick: () => run('delete') }, icon('trash', 14)) : null,
+    h('button', { class: 'btn sec sm', onclick: () => { S.selected.clear(); drawList(); } }, 'Cancel'));
+}
+const SNOOZE = [['1h', '1 hour'], ['3h', '3 hours'], ['tomorrow', 'Tomorrow 9:00'], ['monday', 'Next Monday 9:00'], ['week', '1 week']];
+export function snoozeUntil(k) {
+  const d = new Date();
+  if (k === '1h') return Date.now() + 3600_000; if (k === '3h') return Date.now() + 3 * 3600_000; if (k === 'week') return Date.now() + 7 * 86400_000;
+  d.setHours(9, 0, 0, 0); d.setDate(d.getDate() + (k === 'monday' ? ((8 - d.getDay()) % 7 || 7) : 1)); return d.getTime();
+}
+
 export function renderInbox(main) {
   api('/tags').then(d => { const changed = JSON.stringify(d.tags) !== JSON.stringify(S.tags); S.tags = d.tags; if (changed && S.view === 'inbox' && !document.querySelector('.filters + .filters') && S.tags.length) renderShell(); }).catch(() => {});
   main.append(h('div', { class: 'inbox' },
     h('div', { class: 'list' },
       h('div', { class: 'top' },
         h('input', { placeholder: 'Search conversations…', value: S.q, oninput: debounce(e => { S.q = e.target.value; loadConvs(); }, 250) }),
-        h('div', { class: 'filters' }, ...[['open', 'All open'], ['mine', 'Mine'], ['unassigned', 'Unassigned'], ['human', 'Needs human'], ['closed', 'Closed']]
-          .map(([k, l]) => h('button', { class: S.filter === k ? 'on' : '', onclick: () => { S.filter = k; renderShell(); } }, l))),
+        h('div', { class: 'filters' }, ...[['open', 'All open'], ['mine', 'Mine'], ['unassigned', 'Unassigned'], ['human', 'Needs human'], ['snoozed', '⏰ Snoozed'], ['closed', 'Closed']]
+          .map(([k, l]) => h('button', { class: S.filter === k ? 'on' : '', onclick: () => { S.filter = k; S.view_id = ''; S.selected.clear(); renderShell(); } }, l))),
+        filterBar(),
         S.tags.length ? h('div', { class: 'filters' }, h('span', { class: 'hint', style: 'margin:0 4px 0 0' }, 'Tags:'), ...S.tags.slice(0, 8).map(t => h('button', { class: S.tag === t.name ? 'on' : '', onclick: () => { S.tag = S.tag === t.name ? '' : t.name; renderShell(); } }, `${t.name} ${t.count}`))) : null),
-      h('div', { class: 'items', id: 'items' })),
+      h('div', { id: 'bulk' }), h('div', { class: 'items', id: 'items' })),
     h('div', { class: 'chat', id: 'chat' }), h('div', { class: 'side', id: 'side' })));
   loadConvs().then(() => { if (S.cur && S.convs.has(S.cur)) openConv(S.cur); else drawChatEmpty(); });
   drawSide();
+  if (!S.viewsLoaded) { S.viewsLoaded = true; loadViews().then(() => S.views.length && S.view === 'inbox' && renderShell()); }
 }
 export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 export function drawList() {
   const box = document.getElementById('items'); if (!box) return;
   const list = visibleConvs();
-  box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : '') + (c.unread ? ' unr' : ''), onclick: () => openConv(c.id) },
-    avEl(c.visitor, c.visitor.online ? h('span', { class: 'on-dot' }) : null),
+  for (const id of S.selected) if (!S.convs.has(id)) S.selected.delete(id);
+  const bb = document.getElementById('bulk'); if (bb) bb.replaceChildren(...[bulkBar()].filter(Boolean));
+  const tick = c => h('input', { type: 'checkbox', class: 'tick', checked: S.selected.has(c.id), title: 'Select', onclick: e => { e.stopPropagation(); if (e.target.checked) S.selected.add(c.id); else S.selected.delete(c.id); drawList(); } });
+  box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : '') + (c.unread ? ' unr' : '') + (S.selected.has(c.id) ? ' picked' : ''), onclick: () => openConv(c.id) },
+    tick(c), avEl(c.visitor, c.visitor.online ? h('span', { class: 'on-dot' }) : null),
     h('div', { style: 'min-width:0;flex:1' },
-      h('div', { class: 'nm' }, vname(c.visitor), c.spam ? h('span', { class: 'pill bad' }, 'spam') : c.spam_score >= 40 ? h('span', { class: 'pill warn', title: `Spam score ${c.spam_score}` }, '⚠ spam?') : null, c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
+      h('div', { class: 'nm' }, PRIORITY[c.priority]?.[0] && c.priority !== 'normal' ? h('span', { title: PRIORITY[c.priority][1] + ' priority' }, PRIORITY[c.priority][0]) : null, vname(c.visitor), c.spam ? h('span', { class: 'pill bad' }, 'spam') : c.spam_score >= 40 ? h('span', { class: 'pill warn', title: `Spam score ${c.spam_score}` }, '⚠ spam?') : null, c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
       h('div', { class: 'lb' }, c.last_body || '…'), S.sites.length > 1 && !S.site ? h('div', { class: 'hint', style: 'margin:1px 0 0;font-size:11.5px' }, '🌐 ' + (c.site_name || '')) : null,
-      h('div', { class: 'row', style: 'gap:5px;margin-top:3px;flex-wrap:wrap' }, ...(c.tags || []).slice(0, 3).map(t => h('span', { class: 'tag' }, t)), c.assignee_name ? h('span', { class: 'hint', style: 'margin:0' }, '→ ' + c.assignee_name) : null)))) : [h('div', { class: 'empty' }, h('div', { class: 'big' }, '🎉'), 'No conversations here')]));
+      h('div', { class: 'row', style: 'gap:5px;margin-top:3px;flex-wrap:wrap' }, c.department_name ? h('span', { class: 'tag dept', style: `border-color:${c.department_color};color:${c.department_color}` }, c.department_name) : null,
+        c.snoozed_until ? h('span', { class: 'hint', style: 'margin:0', title: new Date(c.snoozed_until).toLocaleString() }, '⏰ ' + new Date(c.snoozed_until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })) : null,
+        ...(c.tags || []).slice(0, 3).map(t => h('span', { class: 'tag' }, t)), c.assignee_name ? h('span', { class: 'hint', style: 'margin:0' }, '→ ' + c.assignee_name) : null)))) : [h('div', { class: 'empty' }, h('div', { class: 'big' }, '🎉'), 'No conversations here')]));
 }
 export function drawChatEmpty() { const c = document.getElementById('chat'); if (c) c.replaceChildren(h('div', { class: 'empty' }, h('div', { style: 'font-size:40px' }, '💬'), 'Select a conversation')); drawSide(); }
 export async function openConv(id) {
@@ -95,8 +169,15 @@ export function drawHead() {
   const hd = document.getElementById('hd'), c = S.convs.get(S.cur); if (!hd || !c) return;
   const assign = h('select', { disabled: !can('chats.assign'), title: can('chats.assign') ? 'Assign' : 'You cannot reassign chats', onchange: guard(async e => { await api(`/conversations/${c.id}/assign`, 'POST', { agent_id: e.target.value ? +e.target.value : null }); }) },
     h('option', { value: '' }, 'Unassigned'), ...S.members.filter(a => a.can_reply && (!a.site_ids || a.site_ids.includes(c.site_id)) || a.id === c.assignee_id).map(a => h('option', { value: a.id, selected: a.id === c.assignee_id }, a.name)));
-  hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1' }, h('b', {}, vname(c.visitor)),
-    h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '')), assign,
+  const act = (a, body) => guard(() => api(`/conversations/${c.id}/${a}`, 'POST', body))();
+  const prio = can('chats.reply') ? sel(c.priority, v => act('priority', { priority: v }), ...Object.entries(PRIORITY).reverse().map(([k, [e, l]]) => [k, `${e} ${l}`.trim()])) : null;
+  if (prio) prio.title = 'Priority';
+  const snooze = can('chats.reply') ? sel('', v => { if (v) act('snooze', { until: v === 'wake' ? null : snoozeUntil(v) }); }, ['', c.snoozed_until ? '⏰ Snoozed' : '⏰ Snooze'], ...SNOOZE, ...(c.snoozed_until ? [['wake', 'Unsnooze now']] : [])) : null;
+  if (snooze) snooze.title = c.snoozed_until ? 'Snoozed until ' + new Date(c.snoozed_until).toLocaleString() : 'Hide until later';
+  const dept = mod('departments') && S.departments.length && can('chats.assign') ? sel(c.department_id || '', v => act('department', { department_id: v ? +v : null }), ['', 'No department'], ...S.departments.map(d => [d.id, d.name])) : null;
+  if (dept) dept.title = 'Transfer to department';
+  hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1;min-width:120px' }, h('b', {}, vname(c.visitor)),
+    h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '', c.department_name ? ' · ' + c.department_name : '')), prio, snooze, dept, assign,
     can('chats.close') ? h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen') : null,
     can('chats.block') ? h('button', { class: 'btn sec', title: 'Block visitor or report spam', onclick: () => blockDialog(c) }, '🚫') : null,
     h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, icon('download')),
@@ -152,7 +233,7 @@ export function drawSide() {
   const dl = (t, val) => val ? [h('dt', {}, t), h('dd', {}, val)] : [];
   side.replaceChildren(h('h4', {}, 'Visitor'), h('dl', {}, dl('Name', v.name), dl('Email', v.email && h('a', { href: 'mailto:' + v.email }, v.email)), dl('Status', v.online ? 'Online' : 'Offline'),
     dl('Current page', v.page), dl('Visits', String(v.visits)), dl('First seen', new Date(v.created).toLocaleString()), dl('Browser', v.ua?.slice(0, 90))),
-    h('h4', {}, 'Conversation'), h('dl', {}, dl('Status', c.status), dl('Started', new Date(c.created).toLocaleString()), dl('Assignee', c.assignee_name || 'Unassigned'), dl('Handled by', c.bot_active ? 'Bot' : 'Human')));
+    h('h4', {}, 'Conversation'), h('dl', {}, dl('Status', c.status), dl('Started', new Date(c.created).toLocaleString()), dl('Assignee', c.assignee_name || 'Unassigned'), dl('Department', c.department_name), dl('Priority', PRIORITY[c.priority]?.[1]), dl('Snoozed until', c.snoozed_until && new Date(c.snoozed_until).toLocaleString()), dl('Handled by', c.bot_active ? 'Bot' : 'Human')));
 }
 
 // ---------- visitors ----------

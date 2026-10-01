@@ -12,7 +12,7 @@ npm test             # 6 suites: end-to-end, permissions/isolation, platform, fr
 
 ## Multi-workspace platform
 - **Self-service sign-up** at `/app/` → every business gets its own **workspace** (fully isolated data), with any number of **websites**, each with its own install key, widget settings, chatbot, flows, knowledge base and triggers.
-- **Roles & permissions**: Owner, Admin, Supervisor, Agent, Viewer + custom roles built from 18 permissions (e.g. `chats.view_all`, `chats.reply`, `chats.assign`, `contacts.export`, `bot.manage`, `settings.manage`, `team.manage`, `roles.manage`, `audit.view`). Teammates can be limited to specific websites.
+- **Roles & permissions**: Owner, Admin, Supervisor, Agent, Viewer + custom roles built from 19 permissions (e.g. `chats.view_all`, `chats.reply`, `chats.assign`, `contacts.export`, `bot.manage`, `settings.manage`, `team.manage`, `roles.manage`, `audit.view`). Teammates can be limited to specific websites.
 - Enforced on the server for every API call **and every realtime event**; no privilege escalation (you can only grant permissions you hold; admins can't touch owners; the last Owner can't be removed). Role changes apply instantly to connected users.
 - One login can belong to several workspaces (agencies) and switch between them; **audit log** of team, role, website and settings changes; install-key rotation.
 - Env: `ALLOW_SIGNUP=0` to disable public sign-up, `DEMO=0` to hide the demo page's key.
@@ -54,7 +54,9 @@ Every risky action gets an explainable 0–100+ risk score; at the review thresh
 
 ## Features
 - **Embeddable widget** (`/widget.js`, Shadow-DOM isolated): launcher, proactive greeting bubble, quick-reply buttons, typing indicators, unread badge, email capture, persistent visitor identity and history, live page tracking.
-- **Shared inbox**: realtime conversations, filters (mine / unassigned / needs human / closed), search, assign, close/reopen, internal notes, saved replies (`/shortcut`), sound + desktop notifications, visitor details.
+- **Shared inbox**: realtime conversations, filters (mine / unassigned / needs human / snoozed / closed / priority / department / assignee), search, assign, close/reopen, **priority**, **snooze** (wakes up on time or when the visitor writes), personal and shared **saved views**, **bulk actions**, internal notes, saved replies (`/shortcut`), sound + desktop notifications, visitor details.
+- **Departments & routing**: teams like Sales or Support, automatic assignment (**round robin** or **least busy**) to agents who are online and *Available*, max open chats per agent with a waiting queue, transfers between departments, a department picker in the widget, and flows that hand over to a specific department.
+- **Account security**: email verification, password reset by email, authenticator-app 2FA with recovery codes, active sessions with remote sign-out, sign-in history, data export and account deletion.
 - **Chatbot builder**: keyword rules with replies, buttons and human handoff; built-in tester; bot stops once an agent replies; offline message when no agent is online.
 - **Flows**: visual step-by-step conversation builder (messages, choices, questions that save name/email/phone, human handoff) triggered by keywords.
 - **Email** (built-in SMTP client, no dependencies): notify the team when nobody is online, email agent replies to visitors who left, email transcripts on close. Configure `SMTP_URL` (`smtp://user:pass@host:587` STARTTLS or `smtps://…:465`) and `SMTP_FROM`.

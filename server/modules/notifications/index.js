@@ -6,7 +6,7 @@
 import { db, now, getSettings } from '../../core/db.js';
 import { fail, str } from '../../core/http.js';
 import { on } from '../../core/events.js';
-import { defineModule } from '../../core/modules.js';
+import { defineModule, isEnabled } from '../../core/modules.js';
 import { membersWith, memberOf, memberPerms, platformAdmins } from '../../core/auth.js';
 import { sendMail, mailConfigured } from '../../core/mail.js';
 import { toUser, userOnline } from '../../core/realtime.js';
@@ -107,9 +107,15 @@ export const unreadCount = userId => db.prepare('SELECT COUNT(*) n FROM notifica
 // ---------- recipients ----------
 /** Teammates who can reply on the conversation's website and are allowed to see it. */
 function responders(conv) {
+  const dept = conv.department_id && !conv.assignee_id && isEnabled(conv.workspace_id, 'departments')
+    ? new Set(db.prepare('SELECT user_id FROM department_members WHERE department_id=?').all(conv.department_id).map(r => r.user_id)) : null;
   return membersWith(conv.workspace_id, 'chats.reply', conv.site_id)
-    .filter(m => !conv.assignee_id || conv.assignee_id === m.id || m.system || JSON.parse(m.permissions).includes('chats.view_all'));
+    .filter(m => !conv.assignee_id || conv.assignee_id === m.id || m.system || JSON.parse(m.permissions).includes('chats.view_all'))
+    .filter(m => !dept?.size || dept.has(m.id)); // a department with members gets its own chats; an empty one falls back to everyone
 }
+/** Recipients for "new chat" style alerts: an auto-routed assignee hears about it through chat.assigned instead. */
+const autoRouted = new Set(); // conversation ids whose assignee was just told by an auto-routing notification
+const watchers = conv => { const skip = autoRouted.delete(conv.id) ? conv.assignee_id : null; return responders(conv).map(m => m.id).filter(id => id !== skip); };
 const vname = v => v?.name || v?.email || 'A visitor';
 const site = conv => siteRow(conv.site_id)?.name || 'your website';
 const convLink = conv => `inbox/${conv.workspace_id}/${conv.id}`;
@@ -148,12 +154,12 @@ export default defineModule({
   init() {
     on('conversation.created', ({ conv }) => {
       if (conv.bot_active) return; // the bot is handling it; the team hears about it on handoff
-      notify(responders(conv).map(m => m.id), { type: 'chat.new', ws: conv.workspace_id, link: convLink(conv), title: `New conversation on ${site(conv)}`, body: vname(getVisitor(conv.visitor_id)) + ' started a chat' });
+      notify(watchers(conv), { type: 'chat.new', ws: conv.workspace_id, link: convLink(conv), title: `New conversation on ${site(conv)}`, body: vname(getVisitor(conv.visitor_id)) + ' started a chat' });
     });
     on('conversation.handoff', ({ conv }) => {
       const s = getSettings(conv.site_id), v = getVisitor(conv.visitor_id);
       const last = db.prepare("SELECT body FROM messages WHERE conv_id=? AND sender='visitor' ORDER BY id DESC LIMIT 1").get(conv.id)?.body || '';
-      notify(responders(conv).map(m => m.id), { type: 'chat.handoff', ws: conv.workspace_id, link: convLink(conv), urgent: true, throttleKey: 'conv' + conv.id, noEmail: !s.emailNotifications,
+      notify(watchers(conv), { type: 'chat.handoff', ws: conv.workspace_id, link: convLink(conv), urgent: true, throttleKey: 'conv' + conv.id, noEmail: !s.emailNotifications,
         title: `${vname(v)} wants to talk to a human`, body: last.slice(0, 200),
         email: { subject: `[${site(conv)}] New message from ${vname(v)} — needs a human`, text: `${last}\n\nConversation #${conv.id}${v?.email ? `\nVisitor email: ${v.email}` : ''}` } });
     });
@@ -165,9 +171,10 @@ export default defineModule({
         title: `${vname(v)}: ${message.body.slice(0, 80)}`, body: `New message on ${site(conv)}`,
         email: { subject: `[${site(conv)}] New message from ${vname(v)}`, text: `${message.body}\n\nConversation #${conv.id}${v?.email ? `\nVisitor email: ${v.email}` : ''}` } });
     });
-    on('conversation.assigned', ({ conv, assigneeId, by }) => {
+    on('conversation.assigned', ({ conv, assigneeId, by, auto }) => {
       if (assigneeId === by?.id) return;
-      notify([assigneeId], { type: 'chat.assigned', ws: conv.workspace_id, link: convLink(conv), title: `${by?.name || 'Someone'} assigned you a conversation`, body: `${vname(getVisitor(conv.visitor_id))} on ${site(conv)}: “${(conv.last_body || '').slice(0, 120)}”` });
+      if (auto) { autoRouted.add(conv.id); setTimeout(() => autoRouted.delete(conv.id), 5000).unref(); }
+      notify([assigneeId], { type: 'chat.assigned', ws: conv.workspace_id, link: convLink(conv), urgent: !!auto, title: auto ? 'A new chat was routed to you' : `${by?.name || 'Someone'} assigned you a conversation`, body: `${vname(getVisitor(conv.visitor_id))} on ${site(conv)}: “${(conv.last_body || '').slice(0, 120)}”` });
     });
     on('note.created', ({ conv, message, by }) => {
       const users = mentionedMembers(conv.workspace_id, message.body, by.id).filter(u => {
@@ -180,6 +187,9 @@ export default defineModule({
     on('conversation.rated', ({ conv, rating, comment }) => {
       if (!conv.assignee_id) return;
       notify([conv.assignee_id], { type: 'chat.rated', ws: conv.workspace_id, link: convLink(conv), title: `${'★'.repeat(rating)}${'☆'.repeat(5 - rating)} rating from ${vname(getVisitor(conv.visitor_id))}`, body: comment || null });
+    });
+    on('conversation.unsnoozed', ({ conv }) => {
+      if (conv.assignee_id) notify([conv.assignee_id], { type: 'chat.assigned', ws: conv.workspace_id, link: convLink(conv), title: '⏰ Snoozed conversation is back', body: `${vname(getVisitor(conv.visitor_id))} on ${site(conv)}` });
     });
     on('member.added', ({ ws, user, role, by, created }) => {
       const wsName = db.prepare('SELECT name FROM workspaces WHERE id=?').get(ws)?.name;

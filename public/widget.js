@@ -50,7 +50,7 @@
     '.m.visitor{background:var(--c);color:#fff;border-bottom-right-radius:5px}.m.agent,.m.bot{background:var(--bub);color:var(--tx);border:1px solid var(--bd);border-bottom-left-radius:5px}',
     '.meta{font-size:11px;color:var(--mu);margin:8px 6px 2px}.meta.visitor{align-self:flex-end}',
     '.sys{align-self:center;font-size:12px;color:var(--mu);background:var(--bd);padding:3px 12px;border-radius:12px;margin:6px 0}',
-    '.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px 34px}.chip{border:1.5px solid var(--c);color:var(--c);background:transparent;border-radius:18px;padding:7px 14px;font-size:13.5px;font-weight:500;cursor:pointer;transition:all .12s}.chip:hover{background:var(--c);color:#fff}',
+    '.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px 34px}.chip{border:1.5px solid var(--c);color:var(--c);background:transparent;border-radius:18px;padding:7px 14px;font-size:13.5px;font-weight:500;cursor:pointer;transition:all .12s}.chip:hover,.chip.on{background:var(--c);color:#fff}',
     '.typing{align-self:flex-start;background:var(--bub);border:1px solid var(--bd);border-radius:18px;padding:12px 15px;display:flex;gap:4px;margin-left:34px}',
     '.typing i{width:7px;height:7px;border-radius:50%;background:var(--mu);animation:b 1.2s infinite}.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}',
     '@keyframes b{0%,60%,100%{transform:none;opacity:.5}30%{transform:translateY(-4px);opacity:1}}',
@@ -182,6 +182,13 @@
     msgsEl.textContent = '';
     if (!state.messages.length) msgsEl.appendChild(row('bot', el('div', 'm bot', state.settings.greeting)));
     if (prechat) msgsEl.appendChild(prechatCard());
+    var deps = state.settings.departments || [];
+    if (!state.messages.length && !prechat && deps.length) {
+      msgsEl.appendChild(el('div', 'sys', 'What can we help you with?'));
+      var dc = el('div', 'chips');
+      deps.forEach(function (d) { var c = el('button', 'chip' + (state.department === d.id ? ' on' : ''), (state.department === d.id ? '✓ ' : '') + d.name); c.onclick = function () { state.department = state.department === d.id ? null : d.id; render(); inputEl.focus(); }; dc.appendChild(c); });
+      msgsEl.appendChild(dc);
+    }
     var lastIdx = state.messages.length - 1, lastKey = null, lastTime = 0;
     state.messages.forEach(function (m, i) {
       if (m.sender === 'system') { lastKey = null; return msgsEl.appendChild(el('div', 'sys', m.body)); }
@@ -271,6 +278,7 @@
     resetIfClosed(); state.emoji = false;
     var form = panel && panel.querySelector('form.in'); if (form) drawEmoji(form);
     var body = { body: text, page: location.href }; if (state.trigger) { body.trigger = state.trigger; state.trigger = null; }
+    if (state.department && !state.messages.length) body.department_id = state.department;
     api('message', body).then(function (r) {
       if (r.message) addMessage(r.message);
       else if (r.error) { state.messages.push({ id: 'err' + Date.now(), sender: 'system', body: '⚠️ Message not sent: ' + r.error, created: Date.now() }); render(); }

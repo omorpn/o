@@ -5,10 +5,14 @@ import { emit, on } from '../../core/events.js';
 import { defineModule } from '../../core/modules.js';
 import { memberOf, memberPerms } from '../../core/auth.js';
 import { sendMail, mailConfigured } from '../../core/mail.js';
-import { sse, frame, put, toAgents, toVisitor, toSiteVisitors, agentStreams, visitorStreams, isOnline } from '../../core/realtime.js';
+import { sse, frame, put, toAgents, toVisitor, toSiteVisitors, agentStreams, visitorStreams, isOnline, setAway, agentStatus } from '../../core/realtime.js';
+import { isEnabled } from '../../core/modules.js';
 import * as fraud from '../fraud/engine.js';
 import { widgetRoutes } from './widget.js';
-import { visitorOut, getConv, convOut, msgOut, emitConv, addMessage, saveUpload, transcriptText, teamAvailable, siteRow } from './service.js';
+import { visitorOut, getConv, convOut, msgOut, emitConv, addMessage, saveUpload, transcriptText, teamAvailable, siteRow, routing, validDepartment } from './service.js';
+
+export const PRIORITIES = ['low', 'normal', 'high', 'urgent'];
+const PRIORITY_RANK = "CASE c.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'low' THEN 0 ELSE 1 END";
 
 const logMailErr = e => console.error('mail error:', e.message);
 function emailVisitor(convId, subject, text) {
@@ -30,7 +34,11 @@ const TEXT_SETTINGS = ['brandName', 'title', 'subtitle', 'greeting', 'offlineMes
 
 async function conversationAction(c) {
   const conv = loadConv(c, c.int('id')), action = c.params.action;
-  const b = await c.body(action === 'upload' ? 4_500_000 : 200_000);
+  return applyAction(c, conv, action, await c.body(action === 'upload' ? 4_500_000 : 200_000));
+}
+
+/** One inbox action on one conversation; shared by the per-conversation routes and bulk actions. */
+async function applyAction(c, conv, action, b) {
   const refresh = () => emitConv(getConv(conv.id));
   const S = getSettings(conv.site_id), me = c.me;
   const takeOver = () => db.prepare("UPDATE conversations SET bot_active=0, needs_human=0, unread=0, status='open', first_reply=COALESCE(first_reply,?), assignee_id=COALESCE(assignee_id,?) WHERE id=?").run(now() - conv.created, me.id, conv.id);
@@ -85,8 +93,45 @@ async function conversationAction(c) {
       if (aid && aid !== prev) emit('conversation.assigned', { conv: getConv(conv.id), assigneeId: aid, by: me });
       return {};
     }
+    case 'priority': {
+      c.need('chats.reply'); if (!PRIORITIES.includes(b.priority)) fail(400, 'Priority must be low, normal, high or urgent');
+      db.prepare('UPDATE conversations SET priority=? WHERE id=?').run(b.priority, conv.id); refresh(); return { priority: b.priority };
+    }
+    case 'snooze': {
+      c.need('chats.reply');
+      const until = b.until == null ? null : Number(b.until);
+      if (until !== null && !(until > now() && until < now() + 90 * 86400_000)) fail(400, 'Snooze until a time within the next 90 days');
+      db.prepare('UPDATE conversations SET snoozed_until=? WHERE id=?').run(until, conv.id);
+      if (until) addMessage(getConv(conv.id), 'note', `${me.name} snoozed this conversation until ${new Date(until).toUTCString()}`, { senderId: me.id, senderName: me.name });
+      refresh(); return { snoozed_until: until };
+    }
+    case 'department': {
+      c.need('chats.assign');
+      if (!isEnabled(c.ws, 'departments')) fail(403, 'The Departments module is not enabled for this workspace.', { module: 'departments' });
+      const dep = b.department_id == null ? null : validDepartment(c.ws, b.department_id);
+      if (b.department_id != null && !dep) fail(400, 'Unknown department');
+      const prev = conv.assignee_id;
+      db.prepare('UPDATE conversations SET department_id=?, assignee_id=NULL WHERE id=?').run(dep, conv.id);
+      const name = dep ? db.prepare('SELECT name FROM departments WHERE id=?').get(dep).name : null;
+      addMessage(getConv(conv.id), 'note', name ? `${me.name} transferred this conversation to ${name}` : `${me.name} removed the department`, { senderId: me.id, senderName: me.name });
+      if (prev) for (const s of agentStreams) if (s.ws === c.ws && s.userId === prev && !s.viewAll) put(s.res, frame('deleted', { id: conv.id }));
+      try { routing.assign?.(getConv(conv.id)); } catch (e) { console.error('routing failed:', e); }
+      refresh(); emit('conversation.transferred', { conv: getConv(conv.id), departmentId: dep, by: me });
+      return { department_id: dep };
+    }
   }
   fail(404, 'Not found');
+}
+
+/** Brings snoozed conversations back to the inbox when their time is up. Returns how many woke. */
+export function wakeSnoozed() {
+  const due = db.prepare('SELECT * FROM conversations WHERE snoozed_until IS NOT NULL AND snoozed_until<=?').all(now());
+  for (const conv of due) {
+    db.prepare('UPDATE conversations SET snoozed_until=NULL WHERE id=?').run(conv.id);
+    addMessage(getConv(conv.id), 'note', '⏰ Snooze ended — this conversation is back in the inbox', { senderName: 'System' });
+    emitConv(getConv(conv.id)); emit('conversation.unsnoozed', { conv: getConv(conv.id) });
+  }
+  return due.length;
 }
 
 export default defineModule({
@@ -98,6 +143,12 @@ export default defineModule({
       const S = getSettings(conv.site_id); if (!S.emailReplies) return;
       emailVisitor(conv.id, `${S.brandName}: ${message.sender_name} replied to your message`, `${message.body}\n\n— ${message.sender_name}, ${S.brandName}`);
     });
+    // A visitor writing again wakes a snoozed conversation
+    on('message.created', ({ conv, message }) => {
+      if (message.sender !== 'visitor' || !conv.snoozed_until) return;
+      db.prepare('UPDATE conversations SET snoozed_until=NULL WHERE id=?').run(conv.id); emitConv(getConv(conv.id));
+    });
+    setInterval(wakeSnoozed, 30_000).unref();
     on('conversation.closed', ({ conv }) => {
       const S = getSettings(conv.site_id);
       if (S.emailTranscript) emailVisitor(conv.id, `Your conversation with ${S.brandName}`, transcriptText(conv.id));
@@ -142,16 +193,44 @@ export default defineModule({
       if (f === 'mine') { sql += ' AND c.assignee_id=?'; args.push(c.me.id); }
       if (f === 'unassigned') sql += ' AND c.assignee_id IS NULL';
       if (f === 'human') sql += ' AND c.needs_human=1';
+      // snoozed chats leave the open lists until they wake up (or the visitor writes again)
+      if (f === 'snoozed') { sql += ' AND c.snoozed_until IS NOT NULL'; } else if (st !== 'closed') sql += ' AND c.snoozed_until IS NULL';
+      const pr = c.query.get('priority'); if (PRIORITIES.includes(pr)) { sql += ' AND c.priority=?'; args.push(pr); }
+      const dep = c.query.get('department'); if (dep === 'none') sql += ' AND c.department_id IS NULL'; else if (dep) { sql += ' AND c.department_id=?'; args.push(toInt(dep)); }
+      const asg = c.query.get('assignee'); if (asg === 'none') sql += ' AND c.assignee_id IS NULL'; else if (asg) { sql += ' AND c.assignee_id=?'; args.push(toInt(asg)); }
+      for (const [k, op] of [['from', '>='], ['to', '<']]) { const t = Number(c.query.get(k)); if (t > 0) { sql += ` AND c.created${op}?`; args.push(t); } }
       if (c.query.get('tag')) { sql += ' AND c.tags LIKE ?'; args.push(`%"${c.q('tag', 24).replace(/[%_"]/g, '')}"%`); }
       if (q) { sql += ' AND (v.name LIKE ? OR v.email LIKE ? OR c.last_body LIKE ?)'; args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-      sql += ' ORDER BY c.needs_human DESC, c.updated DESC LIMIT 200';
+      sql += ` ORDER BY c.needs_human DESC, ${PRIORITY_RANK} DESC, c.updated DESC LIMIT 200`;
       return { conversations: db.prepare(sql).all(...args).map(convOut) };
     } },
     { method: 'GET', path: '/api/conversations/:id', auth: 'ws', perm: 'chats.view', handler: c => {
       const conv = loadConv(c, c.int('id'));
       return { conversation: convOut(conv), messages: db.prepare('SELECT * FROM messages WHERE conv_id=? ORDER BY id').all(conv.id).map(msgOut) };
     } },
-    { method: 'POST', path: '/api/conversations/:id/:action', match: { action: /^(messages|note|read|typing|status|assign|upload|tags)$/ }, auth: 'ws', perm: 'chats.view', handler: conversationAction },
+    { method: 'POST', path: '/api/conversations/bulk', auth: 'ws', perm: 'chats.view', handler: async c => {
+      const b = await c.body(), ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Number.isInteger))].slice(0, 200);
+      if (!ids.length) fail(400, 'Select at least one conversation');
+      const map = {
+        close: ['status', { status: 'closed' }], reopen: ['status', { status: 'open' }], read: ['read', {}],
+        assign: ['assign', { agent_id: b.value ?? null }], priority: ['priority', { priority: b.value }], department: ['department', { department_id: b.value ?? null }],
+        snooze: ['snooze', { until: b.value }], unsnooze: ['snooze', { until: null }],
+      };
+      if (b.action === 'delete') c.need('chats.delete'); else if (!map[b.action] && b.action !== 'tag') fail(400, 'Unknown bulk action');
+      let updated = 0; const errors = [];
+      for (const id of ids) {
+        let conv; try { conv = loadConv(c, id); } catch { continue; }
+        try {
+          if (b.action === 'delete') { db.prepare('DELETE FROM conversations WHERE id=?').run(id); toAgents(c.ws, conv.site_id, 'deleted', { id }); }
+          else if (b.action === 'tag') await applyAction(c, conv, 'tags', { tags: [...(conv.tags ? JSON.parse(conv.tags) : []), String(b.value || '')] });
+          else await applyAction(c, conv, ...map[b.action]);
+          updated++;
+        } catch (e) { if (e.code === 403) throw e; errors.push(`#${id}: ${e.message}`); }
+      }
+      if (b.action === 'delete') c.log('conversation.deleted', `${updated} conversations (bulk)`);
+      return { updated, errors };
+    } },
+    { method: 'POST', path: '/api/conversations/:id/:action', match: { action: /^(messages|note|read|typing|status|assign|upload|tags|priority|snooze|department)$/ }, auth: 'ws', perm: 'chats.view', handler: conversationAction },
     { method: 'DELETE', path: '/api/conversations/:id', auth: 'ws', perm: 'chats.delete', handler: c => {
       const conv = loadConv(c, c.int('id'));
       db.prepare('DELETE FROM conversations WHERE id=?').run(conv.id); c.log('conversation.deleted', `#${conv.id}`);
@@ -171,6 +250,37 @@ export default defineModule({
       const online = [...visitorStreams.keys()].filter(k => ids.has(Number(k.split(':')[0])));
       const rows = online.length ? db.prepare(`SELECT * FROM visitors WHERE id IN (${online.map(() => '?').join(',')}) ORDER BY last_seen DESC`).all(...online) : [];
       return { visitors: rows.map(v => ({ ...visitorOut(v), site_name: siteRow(v.site_id)?.name })) };
+    } },
+    // ----- saved inbox views (personal, or shared with the whole team) -----
+    { method: 'GET', path: '/api/inbox/views', auth: 'ws', perm: 'chats.view', handler: c => ({
+      views: db.prepare('SELECT v.*, u.name owner_name FROM inbox_views v LEFT JOIN users u ON u.id=v.user_id WHERE v.workspace_id=? AND (v.user_id=? OR v.shared=1) ORDER BY v.shared, v.name').all(c.ws, c.me.id)
+        .map(v => ({ id: v.id, name: v.name, filters: JSON.parse(v.filters), shared: !!v.shared, mine: v.user_id === c.me.id, owner_name: v.owner_name })) }) },
+    { method: 'POST', path: '/api/inbox/views', auth: 'ws', perm: 'chats.view', handler: async c => {
+      const b = await c.body(), name = str(b.name, 60); if (!name) fail(400, 'Give the view a name');
+      if (b.shared) c.need('settings.manage');
+      const f = b.filters || {}, filters = {};
+      for (const k of ['status', 'filter', 'q', 'tag', 'priority', 'department', 'assignee']) if (f[k] != null && f[k] !== '') filters[k] = str(String(f[k]), 100);
+      if (db.prepare('SELECT COUNT(*) n FROM inbox_views WHERE workspace_id=? AND user_id=?').get(c.ws, c.me.id).n >= 30) fail(400, 'You can save up to 30 views');
+      const id = db.prepare('INSERT INTO inbox_views(workspace_id,user_id,name,filters,shared,created) VALUES(?,?,?,?,?,?)').run(c.ws, c.me.id, name, JSON.stringify(filters), b.shared ? 1 : 0, now()).lastInsertRowid;
+      return { id: Number(id) };
+    } },
+    { method: 'DELETE', path: '/api/inbox/views/:id', auth: 'ws', perm: 'chats.view', handler: c => {
+      const v = db.prepare('SELECT * FROM inbox_views WHERE id=? AND workspace_id=?').get(c.int('id'), c.ws);
+      if (!v || (v.user_id !== c.me.id && !v.shared)) fail(404, 'View not found');
+      if (v.user_id !== c.me.id) c.need('settings.manage');
+      db.prepare('DELETE FROM inbox_views WHERE id=?').run(v.id); return {};
+    } },
+    // ----- my availability -----
+    { method: 'PUT', path: '/api/me/status', auth: 'user', handler: async c => {
+      const st = (await c.body()).status; if (!['available', 'away'].includes(st)) fail(400, 'Status must be available or away');
+      const mine = [...agentStreams].filter(s => s.userId === c.me.id && s.ws);
+      const sites = new Set(mine.flatMap(s => db.prepare('SELECT id FROM sites WHERE workspace_id=?').all(s.ws).map(r => r.id)));
+      const before = new Map([...sites].map(id => [id, teamAvailable(id)]));
+      setAway(c.me.id, st === 'away');
+      for (const [id, was] of before) { const on = teamAvailable(id); if (on !== was) toSiteVisitors(id, 'agents', { online: on }); }
+      for (const ws of new Set(mine.map(s => s.ws))) toAgents(ws, null, 'agent_status', { user_id: c.me.id, status: st });
+      emit('agent.status', { userId: c.me.id, status: st, workspaces: [...new Set(mine.map(s => s.ws))] });
+      return { status: agentStatus(c.me.id) };
     } },
     { method: 'GET', path: '/api/canned', auth: 'ws', handler: c => ({ canned: db.prepare('SELECT id, shortcut, text FROM canned WHERE workspace_id=? ORDER BY shortcut').all(c.ws) }) },
     { method: 'POST', path: '/api/canned', auth: 'ws', perm: 'canned.manage', handler: async c => {

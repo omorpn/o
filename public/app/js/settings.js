@@ -1,6 +1,7 @@
 import { S, ago, api, appendTo, avEl, can, guard, h, icon, toast, mod } from './core.js';
 import { renderNotificationPrefs } from './notifications.js';
 import { renderAccount } from './account.js';
+import { renderDepartments } from './departments.js';
 import { installStatus, siteBar, snippet } from './dashboard.js';
 import { actionPill } from './platform.js';
 import { boot, renderShell } from './shell.js';
@@ -10,7 +11,7 @@ export let settingsTab = 'widget';
 export const openSettingsTab = t => { settingsTab = t; };
 export async function renderSettings(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const TABS = [['widget', 'Widget', 'settings.manage'], ['sites', 'Websites'], ['canned', 'Saved replies'], ['team', 'Team', 'team.manage'], ['roles', 'Roles & permissions', 'roles.manage'],
+  const TABS = [['widget', 'Widget', 'settings.manage'], ['sites', 'Websites'], ['canned', 'Saved replies'], ['team', 'Team', 'team.manage'], ['departments', 'Departments & routing', 'team.manage', 'departments'], ['roles', 'Roles & permissions', 'roles.manage'],
     ['modules', 'Modules', ['workspace.manage', 'settings.manage']], ['spam', 'Spam protection', 'chats.block', 'spam'], ['notifications', 'Notifications'], ['audit', 'Audit log', 'audit.view'], ['workspace', 'Workspace'], ['account', 'My account']]
     .filter(t => (!t[2] || [].concat(t[2]).some(can)) && (!t[3] || mod(t[3])));
   if (!TABS.some(t => t[0] === settingsTab)) settingsTab = TABS[0][0];
@@ -115,6 +116,8 @@ export async function renderSettings(main) {
           const r = await api('/members', 'POST', { name: f.name.value, email: f.email.value, password: f.password.value, role_id: +rs.value, site_ids: sp.value() });
           toast(r.created ? 'Account created — share the email and temporary password with them' : 'Existing user added to this workspace'); renderShell();
         }) }, icon('plus', 16), 'Add teammate')));
+  } else if (settingsTab === 'departments') {
+    await renderDepartments(page);
   } else if (settingsTab === 'roles') {
     const { roles } = await api('/roles');
     const groups = {}; for (const [k, d] of Object.entries(S.catalog)) (groups[k.split('.')[0]] ||= []).push([k, d]);

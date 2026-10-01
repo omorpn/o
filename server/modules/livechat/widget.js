@@ -6,6 +6,7 @@ import { isEnabled } from '../../core/modules.js';
 import { sse, frame, toAgents, visitorStreams, isOnline } from '../../core/realtime.js';
 import * as fraud from '../fraud/engine.js';
 import { widgetTriggers, triggerMessage } from '../triggers/index.js';
+import { widgetDepartments } from '../departments/index.js';
 import { automationOn, botRespond } from './automation.js';
 import { addMessage, openConversation, upsertVisitor, saveUpload, emitPresence, getConv, msgOut, teamAvailable, identifyVisitor } from './service.js';
 
@@ -35,7 +36,7 @@ function siteByKey(key) {
   return site;
 }
 const publicSettings = (site, s) => ({ gradient: s.gradient, launcherStyle: s.launcherStyle, launcherLabel: s.launcherLabel, avatarUrl: s.avatarUrl, theme: s.theme, prechatForm: s.prechatForm, showBranding: s.showBranding,
-  triggers: isEnabled(site.workspace_id, 'triggers') ? widgetTriggers(site.id) : [], ratingEnabled: s.ratingEnabled,
+  triggers: isEnabled(site.workspace_id, 'triggers') ? widgetTriggers(site.id) : [], ratingEnabled: s.ratingEnabled, departments: widgetDepartments(site.workspace_id),
   title: s.title, subtitle: s.subtitle, color: s.color, position: s.position, greeting: s.greeting, askEmail: s.askEmail, proactiveEnabled: s.proactiveEnabled, proactiveDelay: s.proactiveDelay, proactiveMessage: s.proactiveMessage, brandName: s.brandName });
 
 const offlineTimers = new Map();
@@ -101,7 +102,7 @@ async function widgetHandler(c) {
       return shadow();
     }
     upsertVisitor(site, vkey, str(b.page, 500), req);
-    const conv = openConversation(site, vkey, { botEnabled: automationOn(ws) });
+    const conv = openConversation(site, vkey, { botEnabled: automationOn(ws), departmentId: widgetDepartments(ws).some(d => d.id === Number(b.department_id)) ? Number(b.department_id) : null });
     if (b.trigger && isEnabled(ws, 'triggers') && db.prepare('SELECT COUNT(*) n FROM messages WHERE conv_id=?').get(conv.id).n === 0) {
       const t = triggerMessage(b.trigger, site.id); if (t) addMessage(conv, 'bot', t, { senderName: 'Bot' });
     }

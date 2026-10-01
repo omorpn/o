@@ -23,6 +23,7 @@ server/
     ├── livechat/         widget API, inbox, visitors, saved replies, settings,    (core)
     │                     automation pipeline (bot steps), visitor emails
     ├── notifications/    in-app center, email, Web Push, preferences, alerts      (core)
+    ├── departments/      teams, automatic assignment (round robin / least busy), queue
     ├── platform/         operator console, plans × modules                        (core)
     ├── fraud/            risk engine, review queue, blocklists                    (core)
     ├── chatbot/          keyword rules + knowledge base (bot step 20)

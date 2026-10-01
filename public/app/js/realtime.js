@@ -41,6 +41,7 @@ export function connect() {
     refreshNavBadge();
   });
   es.addEventListener('deleted', e => { const { id } = JSON.parse(e.data); S.convs.delete(id); if (S.cur === id) { S.cur = null; } if (S.view === 'inbox') renderShell(); });
+  es.addEventListener('agent_status', e => { const { user_id, status } = JSON.parse(e.data); const m = S.members.find(x => x.id === user_id); if (m) m.status = status; if (user_id === S.me.id && S.me.status !== status) { S.me.status = status; renderShell(); } });
   es.addEventListener('presence', e => {
     const p = JSON.parse(e.data);
     if (p.online) S.visitors.set(p.visitor_id, p.visitor); else S.visitors.delete(p.visitor_id);

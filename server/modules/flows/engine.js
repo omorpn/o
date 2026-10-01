@@ -21,6 +21,7 @@ export function validateNodes(nodes) {
     if (!NODE_TYPES.includes(n.type)) return `Unknown step type "${n.type}"`;
     if (n.type !== 'end' && !(typeof n.text === 'string' && n.text.trim())) return `Step "${n.id}" needs text`;
     if (n.type === 'ask' && !ASK_FIELDS.includes(n.field)) return `Step "${n.id}" has a bad field`;
+    if (n.type === 'handoff' && n.department != null && !(Number.isInteger(n.department) && n.department > 0)) return `Step "${n.id}" has a bad department`;
     if (n.type === 'choice' && !(Array.isArray(n.options) && n.options.length && n.options.length <= 6 && n.options.every(o => o && typeof o.label === 'string' && o.label.trim()))) return `Step "${n.id}" needs 1–6 options with labels`;
   }
   for (const n of nodes) for (const nx of [n.next, ...(n.options || []).map(o => o.next)]) if (nx && !ids.has(nx)) return `Step "${n.id}" points to missing step "${nx}"`;
@@ -39,7 +40,7 @@ export function runFlow(convId, flow, nodeId) {
     const n = flow.nodes.find(x => x.id === nodeId); if (!n || n.type === 'end') break;
     addMessage(getConv(convId), 'bot', n.text, { senderName: 'Bot', buttons: n.type === 'choice' ? n.options.map(o => o.label) : null });
     if (n.type === 'choice' || n.type === 'ask') return setFlowState(convId, { flow: flow.id, node: n.id });
-    if (n.type === 'handoff') { setFlowState(convId, null); return handoff(getConv(convId)); }
+    if (n.type === 'handoff') { setFlowState(convId, null); return handoff(getConv(convId), { departmentId: n.department }); }
     nodeId = n.next;
   }
   setFlowState(convId, null);

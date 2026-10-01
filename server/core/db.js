@@ -72,6 +72,37 @@ for (const [t, col] of [['sites', 'last_seen_at INTEGER'], ['sites', 'last_origi
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${col}`); } catch { /* already exists */ }
 }
 
+// Inbox organisation: departments (teams), routing state, saved views, per-user preferences, workspace settings
+db.exec(`
+CREATE TABLE IF NOT EXISTS departments (
+  id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, description TEXT,
+  color TEXT NOT NULL DEFAULT '#6366f1', public INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS department_members (
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (department_id, user_id));
+CREATE TABLE IF NOT EXISTS inbox_views (
+  id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, filters TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS user_prefs (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key));
+CREATE TABLE IF NOT EXISTS workspace_settings (workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (workspace_id, key));
+`);
+for (const col of ['department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL', "priority TEXT NOT NULL DEFAULT 'normal'", 'snoozed_until INTEGER']) {
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN ${col}`); } catch { /* exists */ }
+}
+try { db.exec('ALTER TABLE members ADD COLUMN last_routed INTEGER'); } catch { /* exists */ }
+db.exec('CREATE INDEX IF NOT EXISTS idx_conv_snooze ON conversations(snoozed_until) WHERE snoozed_until IS NOT NULL');
+
+export const WS_DEFAULTS = { assignmentMode: 'manual', maxChats: 0, widgetDepartments: false };
+export function getWsSettings(ws) {
+  const out = { ...WS_DEFAULTS };
+  for (const r of db.prepare('SELECT key, value FROM workspace_settings WHERE workspace_id=?').all(ws)) out[r.key] = JSON.parse(r.value);
+  return out;
+}
+export function setWsSettings(ws, patch) {
+  const st = db.prepare('INSERT INTO workspace_settings(workspace_id,key,value) VALUES(?,?,?) ON CONFLICT(workspace_id,key) DO UPDATE SET value=excluded.value');
+  for (const [k, v] of Object.entries(patch)) if (k in WS_DEFAULTS) st.run(ws, k, JSON.stringify(v));
+}
+
 for (const col of ['ip TEXT', 'ua TEXT', 'last_seen INTEGER']) { try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* exists */ } }
 
 export const now = () => Date.now();

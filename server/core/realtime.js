@@ -37,7 +37,19 @@ setInterval(() => {
 }, 25_000).unref();
 
 const siteWs = id => db.prepare('SELECT workspace_id FROM sites WHERE id=?').get(id)?.workspace_id;
-export const agentsOnline = siteId => { const ws = siteWs(siteId); return new Set([...agentStreams].filter(s => s.canReply && s.ws === ws && (s.sites === null || s.sites.has(siteId))).map(s => s.userId)).size; };
+
+/** Agents who set themselves "Away" stay connected (and notified) but don't count as available and get no routed chats. */
+export const awayUsers = new Set(db.prepare("SELECT user_id FROM user_prefs WHERE key='agentStatus' AND value='\"away\"'").all().map(r => r.user_id));
+export function setAway(userId, away) {
+  if (away) awayUsers.add(userId); else awayUsers.delete(userId);
+  db.prepare('INSERT INTO user_prefs(user_id,key,value) VALUES(?,\'agentStatus\',?) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value').run(userId, JSON.stringify(away ? 'away' : 'available'));
+}
+export const agentStatus = userId => (awayUsers.has(userId) ? 'away' : 'available');
+/** Users connected to the dashboard who can reply on this website and are not away. */
+export function availableAgents(ws, siteId) {
+  return new Set([...agentStreams].filter(s => s.canReply && s.ws === ws && !awayUsers.has(s.userId) && (s.sites === null || s.sites.has(siteId))).map(s => s.userId));
+}
+export const agentsOnline = siteId => availableAgents(siteWs(siteId), siteId).size;
 export const userOnline = userId => [...agentStreams].some(s => s.userId === userId);
 export const isOnline = vkey => (visitorStreams.get(vkey)?.size || 0) > 0;
 

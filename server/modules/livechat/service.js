@@ -30,7 +30,9 @@ export const visitorOut = v => v && ({ id: v.id, site_id: v.site_id, name: v.nam
 export function convOut(c) {
   const v = getVisitor(c.visitor_id);
   const a = c.assignee_id ? db.prepare('SELECT name FROM users WHERE id=?').get(c.assignee_id) : null;
+  const d = c.department_id ? db.prepare('SELECT name, color FROM departments WHERE id=?').get(c.department_id) : null;
   return { id: c.id, site_id: c.site_id, site_name: siteRow(c.site_id)?.name, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
+    department_id: d ? c.department_id : null, department_name: d?.name || null, department_color: d?.color || null, priority: c.priority || 'normal', snoozed_until: c.snoozed_until || null,
     needs_human: !!c.needs_human, spam: !!c.spam, spam_score: c.spam_score || 0, tags: c.tags ? JSON.parse(c.tags) : [], unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
 }
 export const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, created: m.created });
@@ -53,13 +55,23 @@ export function addMessage(conv, sender, body, { senderId = null, senderName = n
   return m;
 }
 
-export function openConversation(site, vkey, { botEnabled = true } = {}) {
+/**
+ * Automatic assignment hook. The departments module installs `assign(conv)`; live chat calls it when a conversation
+ * starts without the bot or is handed over to the team, before announcing it, so notifications know the assignee.
+ */
+export const routing = { assign: null };
+const route = id => { try { routing.assign?.(getConv(id)); } catch (e) { console.error('routing failed:', e); } return getConv(id); };
+/** A department id that belongs to the workspace, or null. */
+export const validDepartment = (ws, id) => (id && db.prepare('SELECT id FROM departments WHERE id=? AND workspace_id=?').get(Number(id), ws)?.id) || null;
+
+export function openConversation(site, vkey, { botEnabled = true, departmentId = null } = {}) {
   let c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
   if (c) return c;
   const t = now();
-  const id = db.prepare('INSERT INTO conversations(site_id,workspace_id,visitor_id,status,bot_active,created,updated) VALUES(?,?,?,?,?,?,?)')
-    .run(site.id, site.workspace_id, vkey, 'open', botEnabled && getSettings(site.id).botEnabled ? 1 : 0, t, t).lastInsertRowid;
+  const id = db.prepare('INSERT INTO conversations(site_id,workspace_id,visitor_id,status,bot_active,department_id,created,updated) VALUES(?,?,?,?,?,?,?,?)')
+    .run(site.id, site.workspace_id, vkey, 'open', botEnabled && getSettings(site.id).botEnabled ? 1 : 0, validDepartment(site.workspace_id, departmentId), t, t).lastInsertRowid;
   c = getConv(id);
+  if (!c.bot_active) c = route(id);
   emitConv(c);
   emit('conversation.created', { conv: c });
   return c;
@@ -93,10 +105,11 @@ export function transcriptText(convId) {
 export const setFlowState = (id, st) => db.prepare('UPDATE conversations SET flow_state=? WHERE id=?').run(st ? JSON.stringify(st) : null, id);
 
 /** Hands the conversation from the bot to the team and tells the visitor whether someone is online. */
-export function handoff(conv) {
+export function handoff(conv, { departmentId = null } = {}) {
   setFlowState(conv.id, null);
   const s = getSettings(conv.site_id), online = teamAvailable(conv.site_id);
-  db.prepare('UPDATE conversations SET bot_active=0, needs_human=1 WHERE id=?').run(conv.id);
+  db.prepare('UPDATE conversations SET bot_active=0, needs_human=1, snoozed_until=NULL, department_id=COALESCE(?,department_id) WHERE id=?').run(validDepartment(conv.workspace_id, departmentId), conv.id);
+  route(conv.id);
   addMessage(getConv(conv.id), 'bot', online ? s.handoffMessage : s.offlineMessage, { senderName: 'Bot' });
   toVisitor(conv.visitor_id, 'handoff', { online, hasEmail: !!getVisitor(conv.visitor_id)?.email });
   const fresh = getConv(conv.id);

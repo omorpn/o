@@ -34,8 +34,9 @@ export async function boot() {
   if (S.site && !S.sites.some(x => x.id === S.site)) S.site = 0;
   S.convs = new Map(); S.cur = null;
   if (!S.me) return;
-  const [a, c] = await Promise.all([api('/members'), api('/canned')]);
-  S.members = a.members; S.canned = c.canned;
+  const [a, c, dep] = await Promise.all([api('/members'), api('/canned'), mod('departments') ? api('/departments').catch(() => null) : null]);
+  S.members = a.members; S.canned = c.canned; S.departments = dep?.departments || []; S.routing = dep?.routing || null;
+  S.views = []; S.viewsLoaded = false; S.view_id = ''; S.selected.clear(); S.f = { priority: '', department: '', assignee: '' };
   connect(); renderShell(); openPendingLink();
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 }
@@ -62,7 +63,10 @@ export function renderShell() {
       S.workspace ? [h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings')] : null,
       S.me.platform_role === 'superadmin' ? [h('div', { class: 'sec' }, 'Platform'), link('platform', 'shield', 'Platform console')] : null,
       h('a', { onclick: () => { setTheme(dark ? 'light' : 'dark'); renderShell(); } }, icon(dark ? 'sun' : 'moon'), h('span', { class: 'lbl' }, dark ? 'Light mode' : 'Dark mode')),
-      h('div', { class: 'me' }, avEl({ id: S.me.email, name: S.me.name }), h('div', {}, h('b', {}, S.me.name), h('small', {}, S.role.name)),
+      h('div', { class: 'me' }, avEl({ id: S.me.email, name: S.me.name }), h('div', { style: 'min-width:0' }, h('b', {}, S.me.name),
+          S.workspace && can('chats.reply') ? h('button', { class: 'stat', title: 'Away: you stay signed in and notified, but the widget won\'t count you as online and no chats are routed to you',
+            onclick: guard(async () => { const r = await api('/me/status', 'PUT', { status: S.me.status === 'away' ? 'available' : 'away' }); S.me.status = r.status; toast(r.status === 'away' ? 'You are now Away' : 'You are Available'); renderShell(); }) },
+            h('span', { class: 'status-dot' + (S.me.status === 'away' ? ' away' : '') }), S.me.status === 'away' ? 'Away' : 'Available') : h('small', {}, S.role?.name)),
         h('button', { title: 'Sign out', onclick: async () => { await api('/auth/logout', 'POST'); S.me = null; renderLogin(); } }, icon('logout')))),
     h('div', { class: 'mainwrap' }, banner, main)));
   if (!S.workspace && S.view !== 'platform') S.view = 'platform';

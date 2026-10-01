@@ -6,6 +6,7 @@ import { defineModule, modulesFor } from '../../core/modules.js';
 import { newSession, clearSession, firstWorkspace, memberOf, audit } from '../../core/auth.js';
 import { PERMISSIONS } from '../../core/rbac.js';
 import { mailConfigured } from '../../core/mail.js';
+import { agentStatus } from '../../core/realtime.js';
 import * as fraud from '../fraud/engine.js';
 import { siteOut } from '../workspace/index.js';
 import { siteRow } from '../livechat/service.js';
@@ -64,7 +65,7 @@ export default defineModule({
       const { me, ws, auth } = c;
       const workspaces = db.prepare('SELECT w.id, w.name, r.name role FROM members m JOIN workspaces w ON w.id=m.workspace_id JOIN roles r ON r.id=m.role_id WHERE m.user_id=? ORDER BY w.name').all(me.id);
       const sec = db.prepare('SELECT email_verified, totp_enabled FROM users WHERE id=?').get(me.id);
-      return { user: { id: me.id, name: me.name, email: me.email, platform_role: me.platform_role || null, email_verified: !!sec.email_verified, two_factor: !!sec.totp_enabled },
+      return { user: { id: me.id, name: me.name, email: me.email, platform_role: me.platform_role || null, email_verified: !!sec.email_verified, two_factor: !!sec.totp_enabled, status: agentStatus(me.id) },
         workspace: ws ? { ...db.prepare('SELECT id, name, plan FROM workspaces WHERE id=?').get(ws), suspended: auth.suspended } : null,
         workspaces, announcement: getPlatform().announcement, role: auth.role, permissions: [...auth.perms], modules: ws ? modulesFor(ws) : [],
         sites: auth.siteIds.map(id => siteOut(siteRow(id))), catalog: PERMISSIONS, aiConfigured: !!process.env.ANTHROPIC_API_KEY, mailConfigured: mailConfigured(), signupEnabled: getPlatform().allowSignup };

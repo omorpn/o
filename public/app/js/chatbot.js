@@ -47,6 +47,8 @@ export function flowEditor(f) {
         h('span', { class: 'grow' }), h('button', { class: 'btn danger sm', disabled: st.nodes.length === 1, onclick: () => { st.nodes.splice(i, 1); draw(); } }, '✕')),
       n.type !== 'end' ? h('textarea', { rows: 2, style: 'margin-top:6px', placeholder: 'What the bot says', oninput: e => { n.text = e.target.value; } }, n.text || '') : null,
       n.type === 'ask' ? h('div', { class: 'row', style: 'margin-top:6px' }, 'Save answer as', h('select', { style: 'width:auto', onchange: e => { n.field = e.target.value; } }, ...['name', 'email', 'phone', 'text'].map(v => h('option', { value: v, selected: n.field === v }, v)))) : null,
+      n.type === 'handoff' && mod('departments') && S.departments.length ? h('div', { class: 'row', style: 'margin-top:6px' }, 'Hand over to', h('select', { style: 'width:auto', onchange: e => { n.department = e.target.value ? +e.target.value : undefined; } },
+        h('option', { value: '' }, 'Whole team'), ...S.departments.map(d => h('option', { value: d.id, selected: n.department === d.id }, d.name)))) : null,
       n.type === 'message' || n.type === 'ask' ? h('div', { class: 'row', style: 'margin-top:6px' }, 'Then go to', nextSel(n.next, v => { n.next = v; })) : null,
       n.type === 'choice' ? h('div', { style: 'margin-top:6px' }, ...(n.options || []).map((o, oi) => h('div', { class: 'row', style: 'margin-bottom:4px' }, h('input', { value: o.label, placeholder: 'Button label', oninput: e => { o.label = e.target.value; } }),
         '→', nextSel(o.next, v => { o.next = v; }), h('button', { class: 'btn sec sm', onclick: () => { n.options.splice(oi, 1); draw(); } }, '−'))),

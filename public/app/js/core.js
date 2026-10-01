@@ -3,7 +3,7 @@ export const $app = document.getElementById('app');
 export const hooks = { unauthorized: () => {} };
 /** Is a feature module enabled for the current workspace? */
 export const mod = key => !!S.modules?.find(m => m.key === key)?.enabled;
-export const S = { modules: [], perms: new Set(), sites: [], site: 0, workspaces: [], members: [], catalog: {}, tag: '', tags: [], aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
+export const S = { modules: [], perms: new Set(), sites: [], site: 0, workspaces: [], members: [], catalog: {}, tag: '', tags: [], aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', f: { priority: '', department: '', assignee: '' }, views: [], departments: [], routing: null, selected: new Set(), visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
 // ---------- utils ----------
 export const appendTo = (el, ...kids) => el.append(...kids.flat().filter(k => k != null && k !== false));
 export function h(tag, attrs, ...kids) {

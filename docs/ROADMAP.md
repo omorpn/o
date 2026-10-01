@@ -7,7 +7,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 — Foundation | multi-tenant accounts, auth, users, roles, permissions, workspace, website install, live chat, unified inbox, contacts | ✅ (gaps: email verification, 2FA, organizations above workspaces) |
+| 1 — Foundation | multi-tenant accounts, auth, users, roles, permissions, workspace, website install, live chat, unified inbox, contacts | ✅ (gap: organizations above workspaces) |
 | 2 — Support | tickets, ticket assignment, departments, tags, internal notes, macros, search, customer history, email, notifications | 🟡 tags, notes, saved replies, search, history, notifications ✅ · **tickets, departments, inbound email ⬜** |
 | 3 — Automation | flow builder, triggers, conditions, actions, forms, webhooks, lead capture, surveys, routing, templates | 🟡 step flows, URL/delay triggers, webhooks, lead capture, CSAT ✅ · visual canvas, conditions, flow actions, templates, routing ⬜ |
 | 4 — AI | AI agent, knowledge base, crawler, PDF/CSV knowledge, guidance, playground, missed questions, handoff, AI analytics | 🟡 Claude answers from Q&A knowledge + handoff ✅ · crawler, documents, guidance, playground, missed questions, AI analytics ⬜ |
@@ -21,11 +21,11 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 | § | Area | Status | Notes |
 |---|---|---|---|
 | 1.1 | Multi-tenant architecture | 🟡 | Workspaces → websites, isolation, per-tenant settings/automation/analytics ✅. No "organization" level above workspaces; billing per tenant ⬜ |
-| 1.2 | Account management | 🟡 | Registration, password auth, sessions, platform password reset ✅. Email verification, self-service reset, 2FA, device list, login history UI, account deletion, data export ⬜ |
+| 1.2 | Account management | ✅ | Registration, email verification, self-service password reset, TOTP 2FA + recovery codes, device/session list with remote sign-out, login history, data export, account deletion ✅. SSO/SAML ⬜ |
 | 1.3 | Workspace setup | 🟡 | Name, website URL, business hours, timezone ✅. Logo, description, category, contact info, language, currency ⬜ |
-| 2 | Users & team | 🟡 | Invitations, Owner/Admin/Supervisor/Agent/Viewer + custom roles, 19 permissions, website-level access, online status ✅. Departments, away status, agent profiles, billing/API/AI-specific permissions ⬜ |
-| 3 | Departments & routing | 🟡 | Manual assignment, reassignment, handoff notification, SLA alert ✅. Departments, round-robin, least-busy, skills, escalation rules ⬜ |
-| 4 | Omnichannel inbox | 🟡 | One inbox, search, filters (status/mine/unassigned/needs human/tag/website), unread ✅. Snooze, priority, saved views, bulk actions, channel filters ⬜ |
+| 2 | Users & team | 🟡 | Invitations, Owner/Admin/Supervisor/Agent/Viewer + custom roles, 19 permissions, website-level access, online status ✅. Departments, Available/Away status ✅. Agent profiles, billing/API/AI-specific permissions ⬜ |
+| 3 | Departments & routing | 🟡 | Departments (members, colour, public/internal), manual / round-robin / least-busy assignment, max concurrent chats, queue that drains when agents become free, transfer between departments, widget department picker, flow handoff to a department, department-scoped notifications, SLA alert ✅. Skills, escalation rules, business-hours per department ⬜ |
+| 4 | Omnichannel inbox | 🟡 | One inbox, search, filters (status/mine/unassigned/needs human/tag/website/priority/department/assignee/date), unread, priority, snooze with auto wake-up, personal + shared saved views, bulk actions (close/reopen/read/assign/priority/department/tag/snooze/delete) ✅. Channel filters ⬜ |
 | 5 | Live chat | ✅ | Widget, realtime, typing, presence, attachments, emoji, timestamps, transcripts, close/reopen, transfer, takeover, notes, @mentions. Read receipts ⬜ |
 | 6 | Proactive chat | 🟡 | Greeting, time, URL/page triggers, auto-open ✅. Location, device, new/returning, scroll, exit-intent, cart/checkout, custom JS triggers ⬜ |
 | 7 | Visitor monitoring | 🟡 | Live list, current page, browser, returning visits ✅. Location, referrer, landing page, page trail, session duration, segments ⬜ |
@@ -58,8 +58,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 
 ## Recommended next steps
 
-1. **Phase 2 completion**: tickets (from chat + manual, status/priority/assignee/department, ticket SLA), departments with
-   round-robin routing, snooze/priority in the inbox, saved views.
+1. **Tickets** (from chat + manual, status/priority/assignee/department, ticket SLA, merge, history).
 2. **Inbound email**: connect a mailbox (IMAP or provider webhooks like Mailgun/Postmark inbound) → tickets with threading.
 3. **AI knowledge**: website crawler + PDF/CSV sources, missed-question review, AI playground.
 4. **Billing** with Paystack/Flutterwave (+ Stripe) tied to the existing plans × modules.

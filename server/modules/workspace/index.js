@@ -5,7 +5,7 @@ import { emit } from '../../core/events.js';
 import { defineModule, modulesFor, getModule, setEnabled, planAllows } from '../../core/modules.js';
 import { memberOf, rolePerms, isSubset } from '../../core/auth.js';
 import { ALL as ALL_PERMS, cleanPerms } from '../../core/rbac.js';
-import { agentStreams, kickUser } from '../../core/realtime.js';
+import { agentStreams, kickUser, agentStatus } from '../../core/realtime.js';
 import { siteRow } from '../livechat/service.js';
 
 export const siteOut = s => ({ id: s.id, name: s.name, domain: s.domain, site_key: s.site_key, created: s.created, last_seen_at: s.last_seen_at, last_origin: s.last_origin,
@@ -99,7 +99,8 @@ export default defineModule({
       const rows = db.prepare('SELECT u.id, u.name, u.email, m.role_id, r.name role, r.system, m.site_ids, r.permissions FROM members m JOIN users u ON u.id=m.user_id JOIN roles r ON r.id=m.role_id WHERE m.workspace_id=? ORDER BY u.name').all(c.ws);
       const online = new Set([...agentStreams].filter(s => s.ws === c.ws).map(s => s.userId));
       return { members: rows.map(r => ({ id: r.id, name: r.name, email: c.can('team.manage') ? r.email : undefined, role_id: r.role_id, role: r.role,
-        site_ids: r.site_ids ? JSON.parse(r.site_ids) : null, can_reply: !!r.system || JSON.parse(r.permissions).includes('chats.reply'), online: online.has(r.id) })) };
+        site_ids: r.site_ids ? JSON.parse(r.site_ids) : null, can_reply: !!r.system || JSON.parse(r.permissions).includes('chats.reply'), online: online.has(r.id), status: agentStatus(r.id),
+        departments: db.prepare('SELECT d.id FROM department_members dm JOIN departments d ON d.id=dm.department_id WHERE dm.user_id=? AND d.workspace_id=?').all(r.id, c.ws).map(x => x.id) })) };
     } },
     { method: 'POST', path: '/api/members', auth: 'ws', perm: 'team.manage', handler: async c => {
       const b = await c.body(), email = str(b.email, 200).toLowerCase(), name = str(b.name, 80);
