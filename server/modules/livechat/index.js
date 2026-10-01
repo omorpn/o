@@ -162,7 +162,7 @@ export default defineModule({
       const { req, res, auth } = c;
       sse(res);
       const ws = auth.suspended ? null : c.ws; // suspended workspaces get notifications only
-      const entry = { res, userId: c.me.id, ws, sites: auth.siteLimit ? new Set(auth.siteIds) : null, viewAll: c.can('chats.view_all'), canReply: !!ws && c.can('chats.reply') };
+      const entry = { res, userId: c.me.id, ws, sites: auth.siteLimit ? new Set(auth.siteIds) : null, viewAll: c.can('chats.view_all'), canReply: !!ws && c.can('chats.reply'), perms: ws ? auth.perms : new Set() };
       const before = new Map(auth.siteIds.map(id => [id, teamAvailable(id)]));
       agentStreams.add(entry);
       res.write(frame('ready', {}));

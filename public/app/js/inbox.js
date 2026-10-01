@@ -1,5 +1,6 @@
 import { S, ago, api, avEl, can, guard, h, icon, mod, toast, vname } from './core.js';
 import { refreshNavBadge, renderShell } from './shell.js';
+import { newTicketDialog } from './tickets.js';
 
 // ---------- inbox ----------
 export async function loadConvs() {
@@ -178,6 +179,7 @@ export function drawHead() {
   if (dept) dept.title = 'Transfer to department';
   hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1;min-width:120px' }, h('b', {}, vname(c.visitor)),
     h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '', c.department_name ? ' · ' + c.department_name : '')), prio, snooze, dept, assign,
+    mod('tickets') && can('tickets.reply') ? h('button', { class: 'btn sec', title: 'Create a ticket from this chat', onclick: () => newTicketDialog(c) }, '🎫') : null,
     can('chats.close') ? h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen') : null,
     can('chats.block') ? h('button', { class: 'btn sec', title: 'Block visitor or report spam', onclick: () => blockDialog(c) }, '🚫') : null,
     h('a', { class: 'btn sec', href: `/api/conversations/${c.id}/transcript`, title: 'Download transcript', style: 'text-decoration:none' }, icon('download')),

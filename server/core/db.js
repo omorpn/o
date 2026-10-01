@@ -93,6 +93,14 @@ try { db.exec('ALTER TABLE members ADD COLUMN last_routed INTEGER'); } catch { /
 db.exec('CREATE INDEX IF NOT EXISTS idx_conv_snooze ON conversations(snoozed_until) WHERE snoozed_until IS NOT NULL');
 
 export const WS_DEFAULTS = { assignmentMode: 'manual', maxChats: 0, widgetDepartments: false };
+db.exec('CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY, at INTEGER NOT NULL)');
+/** Runs a data migration exactly once per database. */
+export function once(name, fn) {
+  if (db.prepare('SELECT 1 FROM migrations WHERE name=?').get(name)) return;
+  fn(); db.prepare('INSERT INTO migrations(name,at) VALUES(?,?)').run(name, Date.now());
+}
+/** Lets a feature module add its own workspace-level settings (with defaults). */
+export const registerWsDefaults = defaults => Object.assign(WS_DEFAULTS, defaults);
 export function getWsSettings(ws) {
   const out = { ...WS_DEFAULTS };
   for (const r of db.prepare('SELECT key, value FROM workspace_settings WHERE workspace_id=?').all(ws)) out[r.key] = JSON.parse(r.value);

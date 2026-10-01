@@ -312,8 +312,11 @@
     state.settings = r.settings; state.visitor = r.visitor || {}; state.agentsOnline = r.agentsOnline;
     r.messages.forEach(function (m) { state.ids[m.id] = 1; state.messages.push(m); });
     mount(); connect(); track();
+    if (pendingOpen !== null) toggle(pendingOpen);
     window.Chatly.ready = true; window.dispatchEvent(new CustomEvent('chatly:ready'));
   }).catch(function (e) { console.error('[Chatly] Widget not started: could not reach ' + BASE + ' (' + e.message + '). Check the server is running and not blocked by an ad blocker or Content-Security-Policy.'); });
 
-  window.Chatly = { ready: false, open: function () { toggle(true); }, close: function () { toggle(false); } };
+  // open()/close() called before the widget finished loading are applied once it is ready
+  var pendingOpen = null;
+  window.Chatly = { ready: false, open: function () { if (state.settings) toggle(true); else pendingOpen = true; }, close: function () { if (state.settings) toggle(false); else pendingOpen = false; } };
 })();

@@ -9,6 +9,7 @@ import { renderPlatform, openPlatformTab } from './platform.js';
 import { connect } from './realtime.js';
 import { renderSettings, openSettingsTab } from './settings.js';
 import { renderTriggers } from './triggers.js';
+import { renderTickets, T } from './tickets.js';
 import { renderVisitors } from './visitors.js';
 
 // ---------- shell ----------
@@ -44,7 +45,7 @@ export function totalUnread() { let n = 0; for (const c of S.convs.values()) if 
 export function renderShell() {
   const link = (v, ic, label) => h('a', { 'data-v': v, class: S.view === v ? 'on' : '', onclick: () => { S.view = v; renderShell(); } }, icon(ic), h('span', { class: 'lbl' }, label),
     v === 'inbox' && totalUnread() ? h('span', { class: 'cnt' }, totalUnread()) : null);
-  const views = { platform: renderPlatform, inbox: renderInbox, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
+  const views = { platform: renderPlatform, inbox: renderInbox, tickets: renderTickets, contacts: renderContacts, visitors: renderVisitors, bot: renderBot, triggers: renderTriggers, settings: renderSettings, dashboard: renderDashboard };
   const main = h('div', { class: 'main', id: 'main' });
   const banner = [S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null,
     S.me.email_verified === false ? h('div', { class: 'announce warnbar' }, '✉️ Please confirm your email address — check your inbox. ', h('a', { href: '#', onclick: guard(async e => { e.preventDefault(); await api('/auth/verify/resend', 'POST'); toast('Confirmation email sent to ' + S.me.email); }) }, 'Resend the link')) : null];
@@ -57,6 +58,7 @@ export function renderShell() {
         S.sites.length > 1 ? h('select', { title: 'Website', onchange: e => { S.site = +e.target.value; S.convs = new Map(); S.cur = null; renderShell(); } },
           h('option', { value: 0 }, 'All websites'), ...S.sites.map(x => h('option', { value: x.id, selected: x.id === S.site }, x.name))) : null),
       S.workspace && can('chats.view') ? [link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox')] : null,
+      S.workspace && can('tickets.view') && mod('tickets') ? link('tickets', 'ticket', 'Tickets') : null,
       can('contacts.view') || can('chats.view') ? h('div', { class: 'sec' }, 'People') : null, can('contacts.view') && mod('contacts') ? link('contacts', 'users', 'Contacts') : null, can('chats.view') ? link('visitors', 'eye', 'Live visitors') : null,
       can('bot.manage') && (mod('chatbot') || mod('flows') || mod('ai') || mod('triggers')) ? [h('div', { class: 'sec' }, 'Automation'),
         mod('chatbot') || mod('flows') || mod('ai') ? link('bot', 'bot', 'Chatbot & flows') : null, mod('triggers') ? link('triggers', 'zap', 'Triggers') : null] : null,
@@ -71,7 +73,8 @@ export function renderShell() {
     h('div', { class: 'mainwrap' }, banner, main)));
   if (!S.workspace && S.view !== 'platform') S.view = 'platform';
   if (S.workspace?.suspended && S.view !== 'platform') { main.append(h('div', { class: 'page' }, h('div', { class: 'card empty' }, h('div', { class: 'big' }, '⛔'), h('h3', {}, 'This workspace is suspended'), h('p', {}, S.workspace.suspended), h('p', { class: 'hint' }, 'Contact support to restore access. You can still switch to another workspace from the sidebar.')))); return; }
-  if (!can('chats.view') && ['dashboard', 'inbox', 'visitors'].includes(S.view)) S.view = can('contacts.view') ? 'contacts' : 'settings';
+  if (!can('chats.view') && ['dashboard', 'inbox', 'visitors'].includes(S.view)) S.view = can('tickets.view') && mod('tickets') ? 'tickets' : can('contacts.view') ? 'contacts' : 'settings';
+  if (S.view === 'tickets' && !(can('tickets.view') && mod('tickets'))) S.view = 'dashboard';
   (views[S.view] || renderSettings)(main);
 }
 export const refreshNavBadge = () => { const a = document.querySelector('.nav a[data-v=inbox]'); if (!a) return; a.querySelector('.cnt')?.remove(); if (totalUnread()) a.append(h('span', { class: 'cnt' }, totalUnread())); };
@@ -84,6 +87,10 @@ export async function openLink(link, wsId) {
   if (view === 'inbox') {
     if (+a && +a !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: +a }); await boot(); }
     S.view = 'inbox'; S.filter = 'open'; S.cur = +b || null; S.site = 0; return renderShell();
+  }
+  if (view === 'tickets') {
+    if (+a && +a !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: +a }); await boot(); }
+    S.view = 'tickets'; T.tab = 'all'; T.view = ''; T.cur = +b || null; return renderShell();
   }
   if (wsId && wsId !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: wsId }).catch(() => {}); await boot(); }
   if (view === 'platform') { openPlatformTab(a || 'overview'); S.view = 'platform'; }

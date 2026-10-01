@@ -3,6 +3,7 @@ import { now, getSettings } from '../../core/db.js';
 import { on } from '../../core/events.js';
 import { defineModule, isEnabled } from '../../core/modules.js';
 import { convOut, visitorOut, getVisitor } from '../livechat/service.js';
+import { ticketOut } from '../tickets/service.js';
 
 function post(siteId, ws, event, data) {
   if (!isEnabled(ws, 'webhooks')) return;
@@ -11,7 +12,7 @@ function post(siteId, ws, event, data) {
 }
 
 export default defineModule({
-  key: 'webhooks', name: 'Webhooks', description: 'Send conversation, message, contact and rating events to your own URL.',
+  key: 'webhooks', name: 'Webhooks', description: 'Send conversation, message, contact, rating and ticket events to your own URL.',
   init() {
     on('conversation.created', ({ conv }) => post(conv.site_id, conv.workspace_id, 'conversation.created', convOut(conv)));
     on('message.created', ({ conv, message }) => {
@@ -20,6 +21,10 @@ export default defineModule({
     });
     on('visitor.identified', ({ visitor }) => post(visitor.site_id, getVisitorWs(visitor), 'visitor.identified', visitorOut(visitor)));
     on('conversation.closed', ({ conv }) => post(conv.site_id, conv.workspace_id, 'conversation.closed', { conversation_id: conv.id }));
+    // tickets: sent to the ticket's website, or the workspace's first website when it has none (e.g. email tickets)
+    const tsite = t => t.site_id || db.prepare('SELECT id FROM sites WHERE workspace_id=? ORDER BY id LIMIT 1').get(t.workspace_id)?.id;
+    for (const ev of ['ticket.created', 'ticket.updated', 'ticket.solved']) on(ev, ({ ticket, changes }) => { const s = tsite(ticket); if (s) post(s, ticket.workspace_id, ev, { ...ticketOut(ticket), ...(changes && { changes }) }); });
+    on('ticket.message', ({ ticket, message }) => { const s = tsite(ticket); if (s && message.kind === 'public') post(s, ticket.workspace_id, 'ticket.message', { ticket_id: ticket.id, number: ticket.number, author_type: message.author_type, body: message.body }); });
     on('conversation.rated', ({ conv, rating }) => post(conv.site_id, conv.workspace_id, 'conversation.rated', { conversation_id: conv.id, rating }));
   },
 });
