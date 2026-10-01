@@ -148,3 +148,5 @@ label.opt{display:flex;gap:10px;align-items:flex-start;font-weight:400;padding:1
 .tmeta{display:flex;gap:6px;align-items:center;font-size:13px;margin-bottom:6px}.tbody{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.5}
 dl.props dd select,dl.props dd input{width:100%;max-width:none}
 .tevents{font-size:12.5px;display:flex;flex-direction:column;gap:8px}
+.note.ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}[data-theme=dark] .note.ok{background:#0d2a20;border-color:#14532d;color:#86efac}
+dl.setup{margin:8px 0 0;font-size:13px}dl.setup dt{font-weight:600;margin-top:8px}dl.setup dd{margin:2px 0 0;color:var(--mut)}

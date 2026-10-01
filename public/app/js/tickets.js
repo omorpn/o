@@ -71,7 +71,7 @@ export function drawTicketList() {
   box.replaceChildren(...(list.length ? list.map(t => h('div', { class: 'item' + (t.id === T.cur ? ' on' : '') + (T.selected.has(t.id) ? ' picked' : ''), onclick: () => openTicket(t.id) },
     h('input', { type: 'checkbox', class: 'tick', checked: T.selected.has(t.id), onclick: e => { e.stopPropagation(); e.target.checked ? T.selected.add(t.id) : T.selected.delete(t.id); drawTicketList(); } }),
     h('div', { style: 'min-width:0;flex:1' },
-      h('div', { class: 'nm' }, t.priority !== 'normal' ? h('span', { title: PRIORITY[t.priority][1] }, PRIORITY[t.priority][0]) : null, h('span', { class: 'tnum' }, '#' + t.number), h('span', { class: 'subj' }, t.subject), h('span', { class: 't' }, ago(t.updated))),
+      h('div', { class: 'nm' }, t.priority !== 'normal' ? h('span', { title: PRIORITY[t.priority][1] }, PRIORITY[t.priority][0]) : null, h('span', { class: 'tnum' }, '#' + t.number), t.channel === 'email' ? h('span', { title: 'Email' }, '✉️') : t.channel === 'chat' ? h('span', { title: 'From chat' }, '💬') : null, h('span', { class: 'subj' }, t.subject), h('span', { class: 't' }, ago(t.updated))),
       h('div', { class: 'lb' }, (t.last_message?.author_type === 'customer' ? '↩ ' : '') + (t.last_message?.body || t.requester_email || '…')),
       h('div', { class: 'row', style: 'gap:5px;margin-top:4px;flex-wrap:wrap' }, pill(STATUS[t.status][0], STATUS[t.status][1]), t.sla && t.sla !== 'ok' ? pill(SLA[t.sla][0], SLA[t.sla][1]) : null,
         t.department_name ? h('span', { class: 'tag dept', style: `border-color:${t.department_color};color:${t.department_color}` }, t.department_name) : null,

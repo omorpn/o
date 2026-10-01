@@ -16,10 +16,11 @@ function lineReader(sock) {
 }
 
 /**
- * @param {{to: string, subject: string, text: string, fromName?: string, replyTo?: string, messageId?: string, inReplyTo?: string, references?: string}} m
+ * @param {{to: string, subject: string, text: string, fromName?: string, replyTo?: string, messageId?: string, inReplyTo?: string, references?: string, autoReply?: boolean}} m
+ *        autoReply marks the message Auto-Submitted so mail servers and helpdesks don't answer it (prevents loops)
  * @returns {Promise<string>} the Message-ID used
  */
-export async function sendMail({ to, subject, text, fromName, replyTo, messageId, inReplyTo, references }) {
+export async function sendMail({ to, subject, text, fromName, replyTo, messageId, inReplyTo, references, autoReply = false }) {
   if (!mailConfigured()) throw new Error('SMTP is not configured');
   to = clean(to); if (!/^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(to)) throw new Error('Bad recipient');
   const u = new URL(process.env.SMTP_URL), secure = u.protocol === 'smtps:';
@@ -56,7 +57,7 @@ export async function sendMail({ to, subject, text, fromName, replyTo, messageId
       await cmd('DATA', '354');
       const body = (b64(String(text ?? '').replace(/\r?\n/g, '\r\n')).match(/.{1,76}/g) || ['']).join('\r\n');
       const extra = [replyTo && /^[^@\s<>]+@[^@\s<>]+$/.test(clean(replyTo)) ? `Reply-To: ${clean(replyTo)}` : null, inReplyTo && angle(inReplyTo) ? `In-Reply-To: ${angle(inReplyTo)}` : null,
-        references && angle(references) ? `References: ${angle(references)}` : null].filter(Boolean);
+        references && angle(references) ? `References: ${angle(references)}` : null, autoReply ? 'Auto-Submitted: auto-replied' : null].filter(Boolean);
       const msg = [`From: ${fromHeader}`, `To: ${to}`, `Subject: =?UTF-8?B?${b64(clean(subject))}?=`, `Date: ${new Date().toUTCString()}`, `Message-ID: ${msgId}`, ...extra,
         'MIME-Version: 1.0', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', body, '.'].join('\r\n');
       await cmd(msg, '250');

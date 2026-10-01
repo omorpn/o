@@ -33,7 +33,7 @@ export async function api(path, method = 'GET', body) {
   if (!r.ok) throw new Error(d.error || 'Request failed');
   return d;
 }
-export function toast(msg) { const t = h('div', { class: 'toast' }, msg); document.body.append(t); setTimeout(() => t.remove(), 2500); }
+export function toast(msg) { const n = document.querySelectorAll('.toast').length, t = h('div', { class: 'toast' }, msg); if (n) t.style.transform = `translate(-50%, ${-n * 52}px)`; document.body.append(t); setTimeout(() => t.remove(), 2500 + n * 400); }
 export const ago = t => { const s = (Date.now() - t) / 1000; return s < 60 ? 'now' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
 export const vname = v => v?.name || v?.email || 'Visitor ' + String(v?.id || '').split(':').pop().slice(1, 6);
 export const ICONS = {

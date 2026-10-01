@@ -4,7 +4,7 @@
  * auth: 'public' | 'user' (signed in) | 'ws' (member of an active workspace, module enabled) | 'platform' (platform admin)
  * perm: permission string or array (any of). match: { param: /regex/ } narrows which values a :param accepts. A handler returns a JSON-able object (sent as 200) or handles `c.res` itself.
  */
-import { send, fail, readBody, ipOf, str, toInt } from './http.js';
+import { send, fail, readBody, readRaw, ipOf, str, toInt } from './http.js';
 import { authCtx, audit } from './auth.js';
 import { isEnabled, getModule, allModules } from './modules.js';
 import { db } from './db.js';
@@ -26,6 +26,8 @@ function makeCtx(req, res, url, params, auth) {
     req, res, url, params, query: url.searchParams, ip: ipOf(req), auth,
     me: auth?.user, ws: auth?.ws,
     body: (max = 200_000) => (bodyPromise ||= readBody(req, max)),
+    /** Raw body (Buffer) for non-JSON payloads such as inbound email webhooks. Don't combine with body(). */
+    raw: (max = 200_000) => readRaw(req, max),
     int: k => toInt(params[k]),
     q: (k, max = 200) => str(url.searchParams.get(k) || '', max),
     can: p => !!auth?.perms.has(p),

@@ -9,11 +9,16 @@ export function send(res, code, obj) {
   res.end(JSON.stringify(obj ?? {}));
 }
 
-export async function readBody(req, max = 200_000) {
+/** The raw request body as a Buffer (413 when larger than `max`). */
+export async function readRaw(req, max = 200_000) {
   let size = 0; const chunks = [];
   for await (const c of req) { size += c.length; if (size > max) fail(413, 'Payload too large'); chunks.push(c); }
-  if (!chunks.length) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString()); } catch { fail(400, 'Invalid JSON'); }
+  return Buffer.concat(chunks);
+}
+export async function readBody(req, max = 200_000) {
+  const buf = await readRaw(req, max);
+  if (!buf.length) return {};
+  try { return JSON.parse(buf.toString()); } catch { fail(400, 'Invalid JSON'); }
 }
 
 export const cookies = req => Object.fromEntries((req.headers.cookie || '').split(';').map(c => c.trim().split('=')).filter(p => p[0]).map(([k, ...v]) => [k, decodeURIComponent(v.join('='))]));
