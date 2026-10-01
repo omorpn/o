@@ -27,6 +27,7 @@ await import('./modules/notifications/index.js');
 await import('./modules/departments/index.js');
 await import('./modules/tickets/index.js');
 await import('./modules/email/index.js');
+await import('./modules/channels/index.js');
 await import('./modules/platform/index.js');
 await import('./modules/billing/index.js');
 await import('./modules/fraud/index.js');

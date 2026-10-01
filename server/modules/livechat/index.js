@@ -139,7 +139,7 @@ export default defineModule({
   init() {
     // Email the visitor an agent's reply when they have left the site
     on('message.created', ({ conv, message }) => {
-      if (message.sender !== 'agent' || isOnline(conv.visitor_id)) return;
+      if (message.sender !== 'agent' || isOnline(conv.visitor_id) || (conv.channel && conv.channel !== 'web')) return; // social channels deliver replies themselves
       const S = getSettings(conv.site_id); if (!S.emailReplies) return;
       emailVisitor(conv.id, `${S.brandName}: ${message.sender_name} replied to your message`, `${message.body}\n\n— ${message.sender_name}, ${S.brandName}`);
     });

@@ -26,16 +26,16 @@ export function withinHours(siteId) {
 }
 export const teamAvailable = siteId => agentsOnline(siteId) > 0 && withinHours(siteId);
 
-export const visitorOut = v => v && ({ id: v.id, site_id: v.site_id, name: v.name, email: v.email, page: v.page, ua: v.ua, visits: v.visits, created: v.created, last_seen: v.last_seen, online: isOnline(v.id) });
+export const visitorOut = v => v && ({ id: v.id, site_id: v.site_id, name: v.name, email: v.email, phone: v.phone || null, channel: v.channel || 'web', page: v.page, ua: v.ua, visits: v.visits, created: v.created, last_seen: v.last_seen, online: isOnline(v.id) });
 export function convOut(c) {
   const v = getVisitor(c.visitor_id);
   const a = c.assignee_id ? db.prepare('SELECT name FROM users WHERE id=?').get(c.assignee_id) : null;
   const d = c.department_id ? db.prepare('SELECT name, color FROM departments WHERE id=?').get(c.department_id) : null;
   return { id: c.id, site_id: c.site_id, site_name: siteRow(c.site_id)?.name, status: c.status, assignee_id: c.assignee_id, assignee_name: a?.name || null, bot_active: !!c.bot_active,
-    department_id: d ? c.department_id : null, department_name: d?.name || null, department_color: d?.color || null, priority: c.priority || 'normal', snoozed_until: c.snoozed_until || null,
+    channel: c.channel || 'web', last_inbound: c.last_inbound || null, department_id: d ? c.department_id : null, department_name: d?.name || null, department_color: d?.color || null, priority: c.priority || 'normal', snoozed_until: c.snoozed_until || null,
     needs_human: !!c.needs_human, spam: !!c.spam, spam_score: c.spam_score || 0, tags: c.tags ? JSON.parse(c.tags) : [], unread: c.unread, last_body: c.last_body, created: c.created, updated: c.updated, visitor: visitorOut(v) };
 }
-export const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, created: m.created });
+export const msgOut = m => ({ id: m.id, conv_id: m.conv_id, sender: m.sender, sender_name: m.sender_name, body: m.body, buttons: m.buttons ? JSON.parse(m.buttons) : [], attachment: m.attachment ? JSON.parse(m.attachment) : null, delivery: m.delivery || null, created: m.created });
 export const emitConv = (c, event = 'conversation') => toAgents(c.workspace_id, c.site_id, event, convOut(c), c);
 export const emitPresence = (v, online) => toAgents(siteWs(v.site_id), v.site_id, 'presence', { visitor_id: v.id, online, visitor: visitorOut(v) });
 
@@ -64,12 +64,12 @@ const route = id => { try { routing.assign?.(getConv(id)); } catch (e) { console
 /** A department id that belongs to the workspace, or null. */
 export const validDepartment = (ws, id) => (id && db.prepare('SELECT id FROM departments WHERE id=? AND workspace_id=?').get(Number(id), ws)?.id) || null;
 
-export function openConversation(site, vkey, { botEnabled = true, departmentId = null } = {}) {
+export function openConversation(site, vkey, { botEnabled = true, departmentId = null, channel = 'web' } = {}) {
   let c = db.prepare("SELECT * FROM conversations WHERE visitor_id=? AND status='open' ORDER BY id DESC LIMIT 1").get(vkey);
   if (c) return c;
   const t = now();
-  const id = db.prepare('INSERT INTO conversations(site_id,workspace_id,visitor_id,status,bot_active,department_id,created,updated) VALUES(?,?,?,?,?,?,?,?)')
-    .run(site.id, site.workspace_id, vkey, 'open', botEnabled && getSettings(site.id).botEnabled ? 1 : 0, validDepartment(site.workspace_id, departmentId), t, t).lastInsertRowid;
+  const id = db.prepare('INSERT INTO conversations(site_id,workspace_id,visitor_id,status,bot_active,department_id,channel,created,updated) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(site.id, site.workspace_id, vkey, 'open', botEnabled && getSettings(site.id).botEnabled ? 1 : 0, validDepartment(site.workspace_id, departmentId), channel, t, t).lastInsertRowid;
   c = getConv(id);
   if (!c.bot_active) c = route(id);
   emitConv(c);

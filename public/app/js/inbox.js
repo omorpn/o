@@ -1,6 +1,7 @@
-import { S, ago, api, avEl, can, guard, h, icon, mod, toast, vname } from './core.js';
+import { S, ago, api, appendTo, avEl, can, guard, h, icon, mod, toast, vname } from './core.js';
 import { refreshNavBadge, renderShell } from './shell.js';
 import { newTicketDialog } from './tickets.js';
+import { CH, templateDialog } from './channels.js';
 
 // ---------- inbox ----------
 export async function loadConvs() {
@@ -116,7 +117,7 @@ export function drawList() {
   box.replaceChildren(...(list.length ? list.map(c => h('div', { class: 'item' + (c.id === S.cur ? ' on' : '') + (c.unread ? ' unr' : '') + (S.selected.has(c.id) ? ' picked' : ''), onclick: () => openConv(c.id) },
     tick(c), avEl(c.visitor, c.visitor.online ? h('span', { class: 'on-dot' }) : null),
     h('div', { style: 'min-width:0;flex:1' },
-      h('div', { class: 'nm' }, PRIORITY[c.priority]?.[0] && c.priority !== 'normal' ? h('span', { title: PRIORITY[c.priority][1] + ' priority' }, PRIORITY[c.priority][0]) : null, vname(c.visitor), c.spam ? h('span', { class: 'pill bad' }, 'spam') : c.spam_score >= 40 ? h('span', { class: 'pill warn', title: `Spam score ${c.spam_score}` }, '⚠ spam?') : null, c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
+      h('div', { class: 'nm' }, PRIORITY[c.priority]?.[0] && c.priority !== 'normal' ? h('span', { title: PRIORITY[c.priority][1] + ' priority' }, PRIORITY[c.priority][0]) : null, c.channel && c.channel !== 'web' ? h('span', { title: CH[c.channel]?.[1] }, CH[c.channel]?.[0]) : null, vname(c.visitor), c.spam ? h('span', { class: 'pill bad' }, 'spam') : c.spam_score >= 40 ? h('span', { class: 'pill warn', title: `Spam score ${c.spam_score}` }, '⚠ spam?') : null, c.needs_human ? h('span', { class: 'pill bad' }, 'human') : null, c.unread ? h('span', { class: 'unread' }, c.unread) : null, h('span', { class: 't' }, ago(c.updated))),
       h('div', { class: 'lb' }, c.last_body || '…'), S.sites.length > 1 && !S.site ? h('div', { class: 'hint', style: 'margin:1px 0 0;font-size:11.5px' }, '🌐 ' + (c.site_name || '')) : null,
       h('div', { class: 'row', style: 'gap:5px;margin-top:3px;flex-wrap:wrap' }, c.department_name ? h('span', { class: 'tag dept', style: `border-color:${c.department_color};color:${c.department_color}` }, c.department_name) : null,
         c.snoozed_until ? h('span', { class: 'hint', style: 'margin:0', title: new Date(c.snoozed_until).toLocaleString() }, '⏰ ' + new Date(c.snoozed_until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })) : null,
@@ -177,8 +178,11 @@ export function drawHead() {
   if (snooze) snooze.title = c.snoozed_until ? 'Snoozed until ' + new Date(c.snoozed_until).toLocaleString() : 'Hide until later';
   const dept = mod('departments') && S.departments.length && can('chats.assign') ? sel(c.department_id || '', v => act('department', { department_id: v ? +v : null }), ['', 'No department'], ...S.departments.map(d => [d.id, d.name])) : null;
   if (dept) dept.title = 'Transfer to department';
-  hd.replaceChildren(avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1;min-width:120px' }, h('b', {}, vname(c.visitor)),
-    h('div', { class: 'hint' }, c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '', c.department_name ? ' · ' + c.department_name : '')), prio, snooze, dept, assign,
+  hd.replaceChildren();
+  appendTo(hd, avEl(c.visitor), h('div', { class: 'grow', style: 'flex:1;min-width:120px' }, h('b', {}, vname(c.visitor)),
+    h('div', { class: 'hint' }, c.channel && c.channel !== 'web' ? `${CH[c.channel][0]} ${CH[c.channel][1]}${c.visitor.phone ? ' ' + c.visitor.phone : ''}` : c.visitor.online ? '🟢 online' : 'offline', c.bot_active ? ' · 🤖 bot handling' : '',
+      c.channel === 'whatsapp' && Date.now() - (c.last_inbound || 0) > 864e5 ? ' · ⏳ 24-hour window closed' : '', c.department_name ? ' · ' + c.department_name : '')), prio, snooze, dept, assign,
+    c.channel === 'whatsapp' && can('chats.reply') ? h('button', { class: 'btn sec', title: 'Send an approved WhatsApp template', onclick: () => templateDialog(c) }, '📋') : null,
     mod('tickets') && can('tickets.reply') ? h('button', { class: 'btn sec', title: 'Create a ticket from this chat', onclick: () => newTicketDialog(c) }, '🎫') : null,
     can('chats.close') ? h('button', { class: 'btn sec', onclick: guard(() => api(`/conversations/${c.id}/status`, 'POST', { status: c.status === 'open' ? 'closed' : 'open' })) }, c.status === 'open' ? '✓ Close' : 'Reopen') : null,
     can('chats.block') ? h('button', { class: 'btn sec', title: 'Block visitor or report spam', onclick: () => blockDialog(c) }, '🚫') : null,
@@ -219,7 +223,8 @@ export function drawMessages() {
     const key = m.sender + (m.sender_name || '');
     if (key !== prev) out.push(h('div', { class: 'meta' + (m.sender === 'visitor' ? '' : ' r') }, (m.sender === 'visitor' ? vname(S.convs.get(S.cur)?.visitor) : m.sender_name || m.sender) + (m.sender === 'note' ? ' (note)' : '') + ' · ' + new Date(m.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
     const att = m.attachment;
-    out.push(h('div', { class: 'msg ' + m.sender }, att ? (/^image\//.test(att.type) ? h('a', { href: att.url, target: '_blank', rel: 'noopener' }, h('img', { src: att.url, alt: att.name, style: 'max-width:240px;border-radius:8px;display:block' })) : h('a', { href: att.url, target: '_blank', rel: 'noopener', style: 'color:inherit' }, '📎 ' + att.name)) : m.body)); prev = key;
+    const tick = m.delivery ? h('span', { class: 'dlv ' + m.delivery, title: m.delivery }, { sent: '✓', delivered: '✓✓', read: '✓✓', failed: '✗' }[m.delivery] || '') : null;
+    out.push(h('div', { class: 'msg ' + m.sender }, tick, att ? (/^image\//.test(att.type) ? h('a', { href: att.url, target: '_blank', rel: 'noopener' }, h('img', { src: att.url, alt: att.name, style: 'max-width:240px;border-radius:8px;display:block' })) : h('a', { href: att.url, target: '_blank', rel: 'noopener', style: 'color:inherit' }, '📎 ' + att.name)) : m.body)); prev = key;
   }
   box.replaceChildren(...out); box.scrollTop = box.scrollHeight; drawTyping();
 }
@@ -233,7 +238,7 @@ export function drawSide() {
   if (!c) return side.replaceChildren(h('div', { class: 'empty' }, 'Visitor details appear here'));
   const v = c.visitor;
   const dl = (t, val) => val ? [h('dt', {}, t), h('dd', {}, val)] : [];
-  side.replaceChildren(h('h4', {}, 'Visitor'), h('dl', {}, dl('Name', v.name), dl('Email', v.email && h('a', { href: 'mailto:' + v.email }, v.email)), dl('Status', v.online ? 'Online' : 'Offline'),
+  side.replaceChildren(h('h4', {}, 'Visitor'), h('dl', {}, dl('Name', v.name), dl('Email', v.email && h('a', { href: 'mailto:' + v.email }, v.email)), dl('Status', c.channel && c.channel !== 'web' ? `${CH[c.channel][1]} customer` : v.online ? 'Online' : 'Offline'), dl('Phone', v.phone),
     dl('Current page', v.page), dl('Visits', String(v.visits)), dl('First seen', new Date(v.created).toLocaleString()), dl('Browser', v.ua?.slice(0, 90))),
     h('h4', {}, 'Conversation'), h('dl', {}, dl('Status', c.status), dl('Started', new Date(c.created).toLocaleString()), dl('Assignee', c.assignee_name || 'Unassigned'), dl('Department', c.department_name), dl('Priority', PRIORITY[c.priority]?.[1]), dl('Snoozed until', c.snoozed_until && new Date(c.snoozed_until).toLocaleString()), dl('Handled by', c.bot_active ? 'Bot' : 'Human')));
 }

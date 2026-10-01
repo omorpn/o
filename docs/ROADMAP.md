@@ -12,7 +12,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 | 3 — Automation | flow builder, triggers, conditions, actions, forms, webhooks, lead capture, surveys, routing, templates | 🟡 step flows, URL/delay triggers, webhooks, lead capture, CSAT ✅ · visual canvas, conditions, flow actions, templates, routing ⬜ |
 | 4 — AI | AI agent, knowledge base, crawler, PDF/CSV knowledge, guidance, playground, missed questions, handoff, AI analytics | 🟡 Claude answers grounded in Q&A + crawled pages/sitemaps/PDF/CSV/text with citations, extractive answers without a key, handoff, playground, missed questions, AI analytics ✅ · AI actions, copilot, guidance library ⬜ |
 | 5 — Ecommerce | products, inventory, orders, cart, recommendations, order/shipping lookup, discounts, refunds, attribution | ⬜ |
-| 6 — Omnichannel | WhatsApp, Instagram, Messenger, email, channel routing, unified history | ⬜ (needs Meta Business / WhatsApp Cloud API accounts) |
+| 6 — Omnichannel | WhatsApp, Instagram, Messenger, email, channel routing, unified history | ✅ WhatsApp Cloud API, Messenger, Instagram and email in one inbox with the same bot/routing/AI · per-channel analytics ⬜ |
 | 7 — Advanced AI | AI actions, OpenAPI, MCP, external APIs, tool permissions, action logs, memory, copilot | ⬜ |
 | 8 — Enterprise | SSO, audit logs, advanced analytics, custom roles, security, API, SDK, data export | 🟡 audit logs, custom roles ✅ · SSO, public API keys, data export ⬜ |
 
@@ -35,7 +35,7 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 | 12–21 | AI agent, knowledge, playground, guidance, actions, handoff, missed questions, copilot | 🟡 | Knowledge sources (website crawler with robots.txt + SSRF guard, sitemaps, PDF, CSV, TXT/MD, pasted text; weekly re-crawl), FTS5/BM25 retrieval, Claude answers with source citations and HANDOFF when unsure, quoted answers without an AI key, missed-question review → Q&A, playground showing which step answers and why, answer-rate / resolved-without-human stats ✅. AI actions (order lookup etc.), agent copilot, per-topic guidance ⬜ |
 | 22–26 | Flows | 🟡 | Step flows (message, choice, question → name/email/phone, handoff, end), keyword trigger ✅. Visual canvas, conditions, delays, API/webhook nodes, templates, analytics ⬜ |
 | 27–29 | Leads, sales, ecommerce | ⬜ | Lead capture via flows only |
-| 30–33 | Social channels | ⬜ | Requires Meta app review + WhatsApp Business account |
+| 30–33 | Social channels | ✅ | WhatsApp (Cloud API), Messenger, Instagram: per-business Meta app credentials (encrypted with DATA_KEY), webhook verify + X-Hub-Signature-256, inbound text/buttons/media/location, contact names, bot + flows + AI + routing, agent replies, interactive buttons/quick replies, delivery/read receipts, failure notes, WhatsApp 24-hour window with approved templates, dedupe of retries. Telegram, SMS, comment replies, broadcast campaigns ⬜ |
 | 34 | Widget customization | 🟡 | Color, gradient, avatar, position, theme, launcher style, branding toggle, welcome message, pre-chat form, live preview ✅. Language, mobile/desktop visibility, custom CSS ⬜ |
 | 35 | Multilingual | ⬜ | |
 | 36 | Customer feedback | 🟡 | CSAT stars + comment, rating history, low-rating notification ✅. Surveys, export ⬜ |
@@ -58,7 +58,8 @@ Chatly does today. ✅ built and tested · 🟡 partly built · ⬜ not started.
 
 ## Recommended next steps
 
-1. **WhatsApp Cloud API** channel (needs a Meta Business account and verified number).
+1. **Ecommerce**: product catalogue sync and order lookup (Shopify / WooCommerce / custom API) so the bot can answer “where is my order?”.
+2. **Public REST API + API keys** and outgoing webhooks per workspace for integrations.
 
 ## Billing (done)
 Paystack, Flutterwave and Stripe checkout; NGN/USD monthly & yearly prices and seat/website limits per plan (Platform → Billing & revenue); payments confirmed with the provider on return and via signed webhooks with amount/currency checks; invoices; Paystack saved-card auto-renewal; reminders, 3-day grace, downgrade to the free plan; cancel/resume; revenue overview. Proration and tax/VAT invoices ⬜.

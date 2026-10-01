@@ -86,10 +86,13 @@ CREATE TABLE IF NOT EXISTS inbox_views (
 CREATE TABLE IF NOT EXISTS user_prefs (user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key));
 CREATE TABLE IF NOT EXISTS workspace_settings (workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (workspace_id, key));
 `);
-for (const col of ['department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL', "priority TEXT NOT NULL DEFAULT 'normal'", 'snoozed_until INTEGER']) {
+for (const col of ['department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL', "priority TEXT NOT NULL DEFAULT 'normal'", 'snoozed_until INTEGER', "channel TEXT NOT NULL DEFAULT 'web'", 'last_inbound INTEGER', 'channel_id INTEGER']) {
   try { db.exec(`ALTER TABLE conversations ADD COLUMN ${col}`); } catch { /* exists */ }
 }
 try { db.exec('ALTER TABLE members ADD COLUMN last_routed INTEGER'); } catch { /* exists */ }
+for (const col of ['phone TEXT', "channel TEXT NOT NULL DEFAULT 'web'"]) { try { db.exec(`ALTER TABLE visitors ADD COLUMN ${col}`); } catch { /* exists */ } }
+for (const col of ['external_id TEXT', 'delivery TEXT']) { try { db.exec(`ALTER TABLE messages ADD COLUMN ${col}`); } catch { /* exists */ } }
+db.exec('CREATE INDEX IF NOT EXISTS idx_msg_external ON messages(external_id) WHERE external_id IS NOT NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_conv_snooze ON conversations(snoozed_until) WHERE snoozed_until IS NOT NULL');
 
 export const WS_DEFAULTS = { assignmentMode: 'manual', maxChats: 0, widgetDepartments: false };

@@ -25,6 +25,7 @@ server/
     ├── notifications/    in-app center, email, Web Push, preferences, alerts      (core)
     ├── departments/      teams, automatic assignment (round robin / least busy), queue
     ├── tickets/          tickets, SLA, history, merge (service.js = domain, index.js = API)
+    ├── channels/         WhatsApp Cloud API, Messenger, Instagram via Meta Graph (meta.js = API client & parsing)
     ├── email/            support mailboxes, inbound email → tickets, threaded replies (parse.js = MIME/provider parsing)
     ├── platform/         operator console, plans × modules                        (core)
     ├── billing/          plans & prices, Paystack/Flutterwave/Stripe checkout, webhooks, renewals, invoices (core)

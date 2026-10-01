@@ -158,3 +158,5 @@ dl.setup{margin:8px 0 0;font-size:13px}dl.setup dt{font-weight:600;margin-top:8p
 .card.plan{display:flex;flex-direction:column;margin:0}.card.plan.current{border-color:var(--pri);box-shadow:0 0 0 2px var(--pri-soft)}
 .plan .price{font-size:26px;font-weight:800;margin:8px 0 2px}.plan .price small{font-size:13px;font-weight:500;color:var(--mut)}
 ul.feat{margin:4px 0 14px;padding-left:18px;font-size:13px;color:var(--mut)}ul.feat li{margin:2px 0}
+.msg .dlv{float:right;margin:2px 0 0 8px;font-size:11px;opacity:.75}.msg .dlv.read{color:#38bdf8;opacity:1}.msg .dlv.failed{color:#ef4444;opacity:1}
+.modal ol.steps{padding-left:20px;font-size:13px;color:var(--mut);line-height:1.5}.modal ol.steps li{margin:4px 0}

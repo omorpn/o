@@ -6,6 +6,6 @@
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node --no-warnings server/index.js",
-    "test": "node --no-warnings test/smoke.mjs && node --no-warnings test/rbac.mjs && node --no-warnings test/platform.mjs && node --no-warnings test/fraud.mjs && node --no-warnings test/modules.mjs && node --no-warnings test/notifications.mjs && node --no-warnings test/security.mjs && node --no-warnings test/routing.mjs && node --no-warnings test/tickets.mjs && node --no-warnings test/email.mjs && node --no-warnings test/knowledge.mjs && node --no-warnings test/billing.mjs"
+    "test": "node --no-warnings test/smoke.mjs && node --no-warnings test/rbac.mjs && node --no-warnings test/platform.mjs && node --no-warnings test/fraud.mjs && node --no-warnings test/modules.mjs && node --no-warnings test/notifications.mjs && node --no-warnings test/security.mjs && node --no-warnings test/routing.mjs && node --no-warnings test/tickets.mjs && node --no-warnings test/email.mjs && node --no-warnings test/knowledge.mjs && node --no-warnings test/billing.mjs && node --no-warnings test/channels.mjs"
   }
 }
