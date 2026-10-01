@@ -3,7 +3,7 @@
  * Scores at or above the review threshold create a review item; at or above the block threshold the
  * action is blocked (in "enforce" mode) or only logged (in "monitor" mode).
  */
-import { db, now, getPlatform } from './db.js';
+import { db, now, getPlatform } from '../../core/db.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS fraud_events (
@@ -79,6 +79,7 @@ export function record({ kind, signals, workspaceId = null, siteId = null, userI
     db.prepare('INSERT INTO fraud_events(created,kind,score,action,workspace_id,site_id,user_id,visitor_id,ip,email,summary,signals,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(now(), kind, score, action, workspaceId, siteId, userId, visitorId, ip, email, String(summary).slice(0, 500), JSON.stringify(signals), action === 'allowed' ? 'dismissed' : 'open');
     if (workspaceId) bumpWorkspaceRisk(workspaceId);
+    if (action !== 'allowed') emit('fraud.detected', { kind, score, action, workspaceId, summary: String(summary).slice(0, 140) });
   }
   return { score, action, signals, blocked: action === 'blocked' };
 }
@@ -214,3 +215,26 @@ export function cleanup() {
   db.prepare('DELETE FROM blocklist WHERE expires IS NOT NULL AND expires<?').run(t);
 }
 setInterval(cleanup, 10 * 60_000).unref();
+
+// ---------- automatic suspension ----------
+import { emit } from '../../core/events.js';
+import { audit, platformAudit } from '../../core/auth.js';
+import { kickWorkspace } from '../../core/realtime.js';
+
+/** Suspends a workspace automatically when its fraud risk crosses the platform threshold (only if enabled). */
+export function maybeAutoSuspend(ws) {
+  const f = fraudSettings(); if (!f.autoSuspend || f.fraudMode !== 'enforce') return;
+  const w = db.prepare('SELECT suspended, risk_score, name FROM workspaces WHERE id=?').get(ws);
+  if (!w || w.suspended || w.risk_score < f.autoSuspendThreshold) return;
+  const reason = `Automatically suspended for review: suspected abuse (risk ${w.risk_score})`;
+  suspendWorkspace(ws, reason, null);
+  platformAudit({ name: 'fraud engine' }, 'workspace.auto_suspended', `${w.name} (#${ws}) risk ${w.risk_score}`);
+}
+
+/** Suspends a workspace: blocks its dashboard, widget and live connections. */
+export function suspendWorkspace(ws, reason, by) {
+  db.prepare('UPDATE workspaces SET suspended=1, suspended_reason=? WHERE id=?').run(reason, ws);
+  audit(ws, by ? { id: by.id, name: `${by.name} (platform)` } : null, 'workspace.suspended', reason);
+  kickWorkspace(ws);
+  emit('workspace.suspended', { ws, reason });
+}

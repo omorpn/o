@@ -96,7 +96,7 @@ export const DEFAULT_SETTINGS = {
   aiEnabled: false, aiInstructions: 'You are a friendly support assistant for our company. Keep answers short.',
   ratingEnabled: true, businessHoursEnabled: false, hoursStart: '09:00', hoursEnd: '17:00', hoursDays: '1,2,3,4,5', timezone: 'UTC',
   webhookUrl: '', gradient: true, launcherStyle: 'circle', launcherLabel: 'Chat with us', avatarUrl: '', theme: 'light',
-  prechatForm: false, showBranding: true, emailNotifications: true, emailReplies: true, emailTranscript: false, spamFilter: 'normal',
+  prechatForm: false, showBranding: true, emailNotifications: true, emailReplies: true, emailTranscript: false, spamFilter: 'normal', slaMinutes: 5,
 };
 
 export function getSettings(siteId) {
@@ -109,7 +109,7 @@ export function setSettings(siteId, patch) {
   for (const [k, v] of Object.entries(patch)) if (k in DEFAULT_SETTINGS) st.run(siteId, k, JSON.stringify(v));
 }
 
-export const PLATFORM_DEFAULTS = { allowSignup: true, announcement: '', plans: 'free,starter,pro,enterprise', fraudMode: 'enforce', reviewThreshold: 40, blockThreshold: 70, autoSuspend: false, autoSuspendThreshold: 250 };
+export const PLATFORM_DEFAULTS = { allowSignup: true, announcement: '', plans: 'free,starter,pro,enterprise', fraudMode: 'enforce', reviewThreshold: 40, blockThreshold: 70, autoSuspend: false, autoSuspendThreshold: 250, planModules: {} };
 export function getPlatform() {
   const out = { ...PLATFORM_DEFAULTS };
   for (const r of db.prepare('SELECT key, value FROM platform_settings').all()) out[r.key] = JSON.parse(r.value);
