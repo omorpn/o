@@ -4,7 +4,7 @@ Zero npm dependencies. Requires Node ≥ 22.13 (uses built-in `node:sqlite`).
 
 ```bash
 npm start            # http://localhost:3000
-npm test             # end-to-end, permissions/isolation, platform and fraud tests
+npm test             # 6 suites: end-to-end, permissions/isolation, platform, fraud, modules, notifications
 ```
 
 - **Demo site** `/` — has the widget installed
@@ -16,6 +16,25 @@ npm test             # end-to-end, permissions/isolation, platform and fraud tes
 - Enforced on the server for every API call **and every realtime event**; no privilege escalation (you can only grant permissions you hold; admins can't touch owners; the last Owner can't be removed). Role changes apply instantly to connected users.
 - One login can belong to several workspaces (agencies) and switch between them; **audit log** of team, role, website and settings changes; install-key rotation.
 - Env: `ALLOW_SIGNUP=0` to disable public sign-up, `DEMO=0` to hide the demo page's key.
+
+## Architecture
+A modular monolith: `server/core/` (router, auth & permissions, realtime, **event bus**, **module registry**, db, mail) plus
+feature modules in `server/modules/` (livechat, chatbot, flows, ai, triggers, contacts, analytics, spam, webhooks,
+notifications, fraud, platform, workspace, auth). The dashboard is split into ES modules under `public/app/js/`.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the spec coverage map in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Modules & plans
+Each business can switch feature modules on/off (Settings → Modules); the platform decides which modules each plan
+includes (Platform console → Plans & modules). Disabled modules are enforced on the server: their API returns a clear
+403, the widget stops running them (e.g. no triggers, no bot) and the dashboard hides them.
+
+## Notifications
+A bell with unread count and a notification center; realtime toasts and desktop alerts; **email** when you're away;
+**Web Push** to your browser even when the dashboard is closed (VAPID keys auto-generated, or set `VAPID_PUBLIC_KEY`,
+`VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`). Per-user preferences per type × channel and quiet hours. Types: new conversation,
+visitor asks for a human, new message in my chats, assigned to me, @mentioned in a note, visitor waiting too long
+(per-website response target), chat rated, added to a workspace, workspace suspended, announcements; platform admins
+also get new sign-ups and fraud alerts. Set `PUBLIC_URL` so links in emails and pushes point at your domain.
 
 ## Platform console (for you, the operator)
 The first account (plus anyone in `PLATFORM_ADMINS=a@x.com,b@y.com`) is a **platform admin** and gets *Platform console* in the sidebar:
@@ -51,8 +70,6 @@ Every risky action gets an explainable 0–100+ risk score; at the review thresh
 ```
 Each website's snippet is in Settings → Websites, which also shows whether the widget has been detected on your site (or why it was blocked) and has a **Test widget** button. Env vars: `PORT`, `DB_FILE` (default `data/chatly.db`).
 
-## Layout
-`server/` API + SSE realtime + SQLite · `public/widget.js` · `public/app/` dashboard SPA · `test/smoke.mjs`
 
 ## Scaling honestly
 This build runs as **one server process with SQLite**; realtime fan-out lives in memory. That comfortably serves many small/medium businesses on one machine, but **not** a million websites. For that scale the next steps are: Postgres instead of SQLite, Redis pub/sub for realtime across many instances, object storage for uploads, and a load balancer — plus billing/plan limits.

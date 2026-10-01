@@ -1,7 +1,9 @@
 export const $app = document.getElementById('app');
 /** Hooks other modules plug into, so core never imports page modules (avoids circular-import ordering issues). */
 export const hooks = { unauthorized: () => {} };
-export const S = { perms: new Set(), sites: [], site: 0, workspaces: [], members: [], catalog: {}, tag: '', tags: [], aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
+/** Is a feature module enabled for the current workspace? */
+export const mod = key => !!S.modules?.find(m => m.key === key)?.enabled;
+export const S = { modules: [], perms: new Set(), sites: [], site: 0, workspaces: [], members: [], catalog: {}, tag: '', tags: [], aiConfigured: false, mailConfigured: false, me: null, siteKey: '', convs: new Map(), cur: null, msgs: [], filter: 'open', q: '', visitors: new Map(), agents: [], canned: [], view: 'inbox', typing: {}, mode: 'reply', stats: null };
 // ---------- utils ----------
 export const appendTo = (el, ...kids) => el.append(...kids.flat().filter(k => k != null && k !== false));
 export function h(tag, attrs, ...kids) {
@@ -58,6 +60,8 @@ export const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 };
 export const icon = (n, size) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('class', 'i'); if (size) { s.style.width = s.style.height = size + 'px'; } s.innerHTML = ICONS[n] || ''; return s; };
 export const HUES = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#0ea5e9', '#14b8a6', '#eab308'];

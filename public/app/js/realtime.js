@@ -2,6 +2,7 @@ import { S, api, beep, toast, vname } from './core.js';
 import { debounce, drawHead, drawList, drawMessages, drawSide, drawTags, drawTyping, loadConvs } from './inbox.js';
 import { boot, refreshNavBadge, renderShell } from './shell.js';
 import { drawVisitors } from './visitors.js';
+import { onNotification, onReadSync } from './notifications.js';
 
 export let es;
 // ---------- realtime ----------
@@ -17,6 +18,8 @@ export function connect() {
   let first = true;
   es.addEventListener('ready', () => { if (!first) checkAccess(); first = false; if (S.view === 'inbox') loadConvs(); });
   es.onerror = debounce(checkAccess, 3000);
+  es.addEventListener('notification', e => onNotification(JSON.parse(e.data)));
+  es.addEventListener('notifications.read', e => onReadSync(JSON.parse(e.data)));
   es.addEventListener('message', e => {
     const { conv, message } = JSON.parse(e.data);
     S.convs.set(conv.id, conv);

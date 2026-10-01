@@ -106,16 +106,18 @@ export default defineModule({
   routes: [
     ...widgetRoutes,
     { method: 'GET', path: '/api/site-key', auth: 'public', handler: c => { if (process.env.DEMO === '0') fail(404, 'Not found'); return { key: db.prepare('SELECT site_key FROM sites ORDER BY id LIMIT 1').get()?.site_key }; } },
-    { method: 'GET', path: '/api/events', auth: 'ws', handler: c => {
+    // Any signed-in user may connect: notifications are per user; workspace events are scoped to the member's access.
+    { method: 'GET', path: '/api/events', auth: 'user', handler: c => {
       const { req, res, auth } = c;
       sse(res);
-      const entry = { res, userId: c.me.id, ws: c.ws, sites: auth.siteLimit ? new Set(auth.siteIds) : null, viewAll: c.can('chats.view_all'), canReply: c.can('chats.reply') };
+      const ws = auth.suspended ? null : c.ws; // suspended workspaces get notifications only
+      const entry = { res, userId: c.me.id, ws, sites: auth.siteLimit ? new Set(auth.siteIds) : null, viewAll: c.can('chats.view_all'), canReply: !!ws && c.can('chats.reply') };
       const before = new Map(auth.siteIds.map(id => [id, teamAvailable(id)]));
       agentStreams.add(entry);
       res.write(frame('ready', {}));
       const announce = () => { for (const [id, was] of before) { const nowOn = teamAvailable(id); if (nowOn !== was) toSiteVisitors(id, 'agents', { online: nowOn }); } };
       announce();
-      emit('agent.online', { userId: c.me.id, ws: c.ws });
+      emit('agent.online', { userId: c.me.id, ws });
       req.on('close', () => { for (const id of before.keys()) before.set(id, teamAvailable(id)); agentStreams.delete(entry); announce(); });
     } },
     { method: 'GET', path: '/api/stats', auth: 'ws', perm: 'chats.view', handler: c => {

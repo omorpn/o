@@ -1,33 +1,34 @@
-import { S, api, appendTo, can, guard, h, toast } from './core.js';
+import { S, api, appendTo, can, guard, h, toast, mod } from './core.js';
 import { siteBar } from './dashboard.js';
 import { renderShell } from './shell.js';
 
 // ---------- chatbot ----------
 export async function renderBot(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const [{ rules }, { settings }, { kb }, { flows }] = await Promise.all([api('/rules'), api('/settings'), api('/kb'), api('/flows')]);
+  const off = () => Promise.resolve({});
+  const [{ rules = [] }, { settings }, { kb = [] }, { flows = [] }] = await Promise.all([mod('chatbot') ? api('/rules') : off(), api('/settings'), mod('chatbot') ? api('/kb') : off(), mod('flows') ? api('/flows') : off()]);
   const admin = can('bot.manage');
   appendTo(page, h('h2', {}, 'Chatbot & flows'), siteBar(),
     h('div', { class: 'card' }, h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.botEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { botEnabled: e.target.checked }); toast('Saved'); }) }), 'Enable chatbot for new conversations'),
       h('div', { class: 'hint' }, 'The bot answers with the first rule that matches, and hands over to a human on request. As soon as an agent replies, the bot stops.'),
-      h('label', {}, 'Try it'), h('div', { class: 'row' }, h('input', { id: 'bt', placeholder: 'Type a visitor message to test the rules…', class: 'grow' }),
+      mod('chatbot') && h('label', {}, 'Try it'), mod('chatbot') && h('div', { class: 'row' }, h('input', { id: 'bt', placeholder: 'Type a visitor message to test the rules…', class: 'grow' }),
         h('button', { class: 'btn sec', onclick: guard(async () => { const { rule } = await api('/bot/test', 'POST', { text: document.getElementById('bt').value }); document.getElementById('btr').textContent = rule ? `✓ "${rule.name}" → ${rule.reply}` : '✗ No rule matches — fallback message is sent'; }) }, 'Test')), h('div', { class: 'hint', id: 'btr' })),
-    h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Flows'), admin ? h('button', { class: 'btn', onclick: () => flowEditor(null) }, '+ New flow') : null),
+    mod('flows') && h('div', { class: 'card' }, h('div', { class: 'row' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Flows'), admin ? h('button', { class: 'btn', onclick: () => flowEditor(null) }, '+ New flow') : null),
       h('div', { class: 'hint' }, 'Guided conversations: the bot asks questions, offers choices, captures name/email and can hand over to a human. A flow starts when its keywords match and takes priority over simple rules.'),
       ...flows.map(f => h('div', { class: 'row', style: 'padding:10px 0;border-top:1px solid var(--bd)' }, h('div', { class: 'grow' }, h('b', {}, f.name), ' ', f.enabled ? null : h('span', { class: 'pill' }, 'disabled'),
         h('div', { class: 'hint' }, `Keywords: ${f.keywords} · ${f.nodes.length} steps`)),
         admin ? [h('button', { class: 'btn sec sm', onclick: () => flowEditor(f) }, 'Edit'), h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm('Delete flow?')) { await api('/flows/' + f.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null))),
-    h('div', { class: 'card' }, h('h3', {}, 'AI answers'),
+    mod('ai') && h('div', { class: 'card' }, h('h3', {}, 'AI answers'),
       h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: settings.aiEnabled, disabled: !admin, onchange: guard(async e => { await api('/settings', 'PUT', { aiEnabled: e.target.checked }); toast('Saved'); }) }), 'Use Claude to answer from the knowledge base when no rule matches'),
       h('div', { class: 'hint' }, S.aiConfigured ? '✓ ANTHROPIC_API_KEY is configured on the server.' : 'Set the ANTHROPIC_API_KEY environment variable on the server to enable this. Without it, the knowledge base still answers by keyword matching.'),
       h('label', {}, 'Assistant instructions'), h('textarea', { rows: 2, id: 'aiins', disabled: !admin }, settings.aiInstructions),
       admin ? h('button', { class: 'btn sec sm', style: 'margin-top:6px', onclick: guard(async () => { await api('/settings', 'PUT', { aiInstructions: document.getElementById('aiins').value }); toast('Saved'); }) }, 'Save instructions') : null),
-    h('div', { class: 'card' }, h('h3', {}, 'Knowledge base'), h('div', { class: 'hint' }, 'Question & answer pairs the bot uses when no rule matches (and that the AI answers from).'),
+    mod('chatbot') && h('div', { class: 'card' }, h('h3', {}, 'Knowledge base'), h('div', { class: 'hint' }, 'Question & answer pairs the bot uses when no rule matches (and that the AI answers from).'),
       ...kb.map(e => h('div', { class: 'row', style: 'padding:8px 0;border-bottom:1px solid var(--bd)' }, h('div', { class: 'grow' }, h('b', {}, e.question), h('div', {}, e.answer)),
         admin ? h('button', { class: 'btn danger sm', onclick: guard(async () => { await api('/kb/' + e.id, 'DELETE'); renderShell(); }) }, 'Delete') : null)),
       admin ? h('div', { style: 'margin-top:12px' }, h('input', { id: 'kbq', placeholder: 'Question, e.g. Do you ship internationally?' }), h('textarea', { id: 'kba', rows: 2, placeholder: 'Answer', style: 'margin-top:6px' }),
         h('button', { class: 'btn sm', style: 'margin-top:6px', onclick: guard(async () => { await api('/kb', 'POST', { question: document.getElementById('kbq').value, answer: document.getElementById('kba').value }); renderShell(); }) }, 'Add entry')) : null),
-    h('div', { class: 'row', style: 'margin-bottom:10px' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Rules'), admin ? h('button', { class: 'btn', onclick: () => ruleEditor(main, null) }, '+ New rule') : null),
+    mod('chatbot') && h('div', { class: 'row', style: 'margin-bottom:10px' }, h('h3', { class: 'grow', style: 'margin:0' }, 'Rules'), admin ? h('button', { class: 'btn', onclick: () => ruleEditor(main, null) }, '+ New rule') : null),
     ...rules.map(r => h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', {}, r.name), ' ', r.handoff ? h('span', { class: 'pill warn' }, 'hands off to human') : null, r.enabled ? null : h('span', { class: 'pill' }, 'disabled'),
       h('div', { class: 'hint' }, 'Keywords: ' + r.keywords), h('div', {}, '💬 ' + r.reply), r.buttons.length ? h('div', { class: 'hint' }, 'Buttons: ' + r.buttons.join(' · ')) : null),
       admin ? [h('button', { class: 'btn sec sm', onclick: () => ruleEditor(main, r) }, 'Edit'), h('button', { class: 'btn danger sm', onclick: guard(async () => { if (confirm('Delete rule?')) { await api('/rules/' + r.id, 'DELETE'); renderShell(); } }) }, 'Delete')] : null))));

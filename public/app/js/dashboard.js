@@ -1,20 +1,20 @@
-import { S, ago, api, appendTo, avEl, can, cfgSite, h, icon } from './core.js';
+import { S, ago, api, appendTo, avEl, can, cfgSite, h, icon, mod } from './core.js';
 import { renderShell } from './shell.js';
 
 // ---------- overview ----------
 export async function renderDashboard(main) {
   const page = h('div', { class: 'page' }); main.append(page);
   const safe = p => api(p).catch(() => null);
-  const [s, an, kb] = await Promise.all([api('/stats'), can('analytics.view') ? safe('/analytics') : null, safe('/kb')]);
+  const [s, an, kb] = await Promise.all([api('/stats'), can('analytics.view') && mod('analytics') ? safe('/analytics') : null, mod('chatbot') ? safe('/kb') : null]);
   const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
   const steps = can('settings.manage') ? [
     ['Install the widget on your website', 'Settings → Websites has the snippet for each site', s.today + s.open + s.resolved + s.visitorsOnline > 0],
     ['Receive your first conversation', 'Open your site (or the demo page) and say hello', s.open + s.resolved > 0],
-    ['Teach the bot with your FAQ', 'Chatbot & flows → Knowledge base', (kb?.kb.length || 0) > 2],
+    mod('chatbot') ? ['Teach the bot with your FAQ', 'Chatbot & flows → Knowledge base', (kb?.kb.length || 0) > 2] : null,
     ['Invite a teammate', 'Settings → Team', S.members.length > 1],
     ['Add another website', 'Settings → Websites', S.sites.length > 1],
-  ] : [];
+  ].filter(Boolean) : [];
   const done = steps.filter(x => x[2]).length;
   const siteName = S.site ? S.sites.find(x => x.id === S.site)?.name : S.sites.length > 1 ? 'all websites' : S.sites[0]?.name;
   appendTo(page, h('h2', {}, `${greet}, ${S.me.name.split(' ')[0]} 👋`), h('p', { class: 'hint', style: 'margin:-10px 0 18px' }, `${S.workspace.name} · ${siteName} · you are ${S.role.name}`),

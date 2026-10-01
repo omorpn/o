@@ -4,9 +4,10 @@ import { boot, renderShell } from './shell.js';
 
 // ---------- platform console (super admins) ----------
 export let platformTab = 'overview';
+export const openPlatformTab = t => { platformTab = t; };
 export async function renderPlatform(main) {
   const page = h('div', { class: 'page' }); main.append(page);
-  const TABS = [['overview', 'Overview'], ['fraud', 'Fraud & abuse'], ['workspaces', 'Workspaces'], ['users', 'Users'], ['settings', 'Platform settings'], ['audit', 'Platform audit']];
+  const TABS = [['overview', 'Overview'], ['fraud', 'Fraud & abuse'], ['workspaces', 'Workspaces'], ['users', 'Users'], ['plans', 'Plans & modules'], ['settings', 'Platform settings'], ['audit', 'Platform audit']];
   appendTo(page, h('h2', {}, '🛡 Platform console'), h('p', { class: 'hint', style: 'margin:-10px 0 16px' }, 'Every workspace on this Chatly server. Only platform admins can see this.'),
     h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: platformTab === k ? 'on' : '', onclick: () => { platformTab = k; renderShell(); } }, l))));
   const stat = (ic, n, l, cls) => h('div', { class: 'stat ' + (cls || '') }, h('div', { class: 'ico' }, icon(ic)), h('div', {}, h('b', {}, n), h('span', {}, l)));
@@ -55,6 +56,15 @@ export async function renderPlatform(main) {
     appendTo(page, h('div', { class: 'card', style: 'max-width:640px' }, h('label', { class: 'inline' }, su, 'Allow new businesses to sign up'), signupForcedOff ? h('div', { class: 'hint' }, 'Forced off by the ALLOW_SIGNUP=0 environment variable.') : null,
       h('label', {}, 'Announcement banner'), an, h('label', {}, 'Plans (comma separated)'), pl, h('div', { class: 'hint' }, 'Labels you can assign to workspaces. Billing is not connected yet.'),
       h('button', { class: 'btn', style: 'margin-top:14px', onclick: guard(async () => { await api('/platform/settings', 'PUT', { allowSignup: su.checked, announcement: an.value, plans: pl.value }); toast('Saved'); await boot(); }) }, 'Save')));
+  } else if (platformTab === 'plans') {
+    const { plans, modules } = await api('/platform/plans');
+    appendTo(page, h('p', { class: 'hint', style: 'margin:0 0 14px' }, 'Choose which feature modules each plan includes. Core modules (live chat, inbox, team, notifications) are always included. Rename plans under Platform settings.'),
+      h('div', { class: 'card', style: 'padding:0;overflow:auto' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Module'), ...plans.map(p => h('th', { style: 'text-align:center' }, p.plan, h('div', { class: 'hint', style: 'margin:0;text-transform:none' }, `${p.workspaces} workspace${p.workspaces === 1 ? '' : 's'}`))))),
+        h('tbody', {}, ...modules.map(m => h('tr', {}, h('td', {}, h('b', {}, m.name), h('div', { class: 'hint', style: 'margin:0' }, m.description)),
+          ...plans.map(p => h('td', { style: 'text-align:center' }, h('input', { type: 'checkbox', checked: p.modules.includes(m.key), 'aria-label': `${m.name} in ${p.plan}`, onchange: guard(async e => {
+            const next = e.target.checked ? [...new Set([...p.modules, m.key])] : p.modules.filter(k => k !== m.key);
+            const r = await api('/platform/plans/' + encodeURIComponent(p.plan), 'PUT', { modules: next }); p.modules = r.modules; toast(`${p.plan}: ${m.name} ${e.target.checked ? 'included' : 'removed'}`);
+          }) })))))))));
   } else if (platformTab === 'audit') {
     const { entries } = await api('/platform/audit');
     appendTo(page, h('div', { class: 'card', style: 'padding:0' }, entries.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Admin', 'Action', 'Details'].map(x => h('th', {}, x)))),

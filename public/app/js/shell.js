@@ -1,12 +1,13 @@
 import { renderLogin } from './auth.js';
 import { renderBot } from './chatbot.js';
 import { renderContacts } from './contacts.js';
-import { S, api, avEl, can, guard, h, icon, setTheme , $app } from './core.js';
+import { S, api, avEl, can, guard, h, icon, setTheme, mod, $app } from './core.js';
+import { bellButton, loadNotifications, setNavigator, N } from './notifications.js';
 import { renderDashboard } from './dashboard.js';
 import { renderInbox } from './inbox.js';
-import { renderPlatform } from './platform.js';
+import { renderPlatform, openPlatformTab } from './platform.js';
 import { connect } from './realtime.js';
-import { renderSettings } from './settings.js';
+import { renderSettings, openSettingsTab } from './settings.js';
 import { renderTriggers } from './triggers.js';
 import { renderVisitors } from './visitors.js';
 
@@ -27,14 +28,15 @@ export async function boot() {
   if (!d?.user) return;
   S.me = d.user; S.role = d.role; S.workspace = d.workspace; S.workspaces = d.workspaces; S.perms = new Set(d.permissions); S.sites = d.sites; S.catalog = d.catalog;
   S.aiConfigured = d.aiConfigured; S.mailConfigured = d.mailConfigured;
-  S.announcement = d.announcement;
-  if (!S.workspace) return S.me.platform_role === 'superadmin' ? (S.view = 'platform', renderShell()) : renderNoWorkspace();
+  S.announcement = d.announcement; S.modules = d.modules || [];
+  N.loaded = false; loadNotifications();
+  if (!S.workspace) return S.me.platform_role === 'superadmin' ? (S.view = 'platform', connect(), renderShell(), openPendingLink()) : renderNoWorkspace();
   if (S.site && !S.sites.some(x => x.id === S.site)) S.site = 0;
   S.convs = new Map(); S.cur = null;
   if (!S.me) return;
   const [a, c] = await Promise.all([api('/members'), api('/canned')]);
   S.members = a.members; S.canned = c.canned;
-  connect(); renderShell();
+  connect(); renderShell(); openPendingLink();
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 }
 export function totalUnread() { let n = 0; for (const c of S.convs.values()) if (c.status === 'open') n += c.unread ? 1 : 0; return n; }
@@ -46,14 +48,15 @@ export function renderShell() {
   const banner = S.announcement ? h('div', { class: 'announce' }, '📣 ', S.announcement) : null;
   const dark = document.documentElement.dataset.theme === 'dark';
   $app.replaceChildren(h('div', { class: 'shell' },
-    h('div', { class: 'nav' }, h('div', { class: 'brand' }, h('div', { class: 'lg' }, icon('logo')), h('span', {}, 'Chatly')),
+    h('div', { class: 'nav' }, h('div', { class: 'brand' }, h('div', { class: 'lg' }, icon('logo')), h('span', {}, 'Chatly')), bellButton(),
       h('div', { class: 'switch' },
         h('select', { title: 'Workspace', onchange: e => switchWorkspace(e.target.value) }, ...S.workspaces.map(w => h('option', { value: w.id, selected: w.id === S.workspace?.id }, w.name)), h('option', { value: 'new' }, '+ New workspace…')),
         S.sites.length > 1 ? h('select', { title: 'Website', onchange: e => { S.site = +e.target.value; S.convs = new Map(); S.cur = null; renderShell(); } },
           h('option', { value: 0 }, 'All websites'), ...S.sites.map(x => h('option', { value: x.id, selected: x.id === S.site }, x.name))) : null),
       S.workspace && can('chats.view') ? [link('dashboard', 'home', 'Overview'), link('inbox', 'inbox', 'Inbox')] : null,
-      can('contacts.view') || can('chats.view') ? h('div', { class: 'sec' }, 'People') : null, can('contacts.view') ? link('contacts', 'users', 'Contacts') : null, can('chats.view') ? link('visitors', 'eye', 'Live visitors') : null,
-      can('bot.manage') ? [h('div', { class: 'sec' }, 'Automation'), link('bot', 'bot', 'Chatbot & flows'), link('triggers', 'zap', 'Triggers')] : null,
+      can('contacts.view') || can('chats.view') ? h('div', { class: 'sec' }, 'People') : null, can('contacts.view') && mod('contacts') ? link('contacts', 'users', 'Contacts') : null, can('chats.view') ? link('visitors', 'eye', 'Live visitors') : null,
+      can('bot.manage') && (mod('chatbot') || mod('flows') || mod('ai') || mod('triggers')) ? [h('div', { class: 'sec' }, 'Automation'),
+        mod('chatbot') || mod('flows') || mod('ai') ? link('bot', 'bot', 'Chatbot & flows') : null, mod('triggers') ? link('triggers', 'zap', 'Triggers') : null] : null,
       S.workspace ? [h('div', { class: 'sec' }, 'Workspace'), link('settings', 'cog', 'Settings')] : null,
       S.me.platform_role === 'superadmin' ? [h('div', { class: 'sec' }, 'Platform'), link('platform', 'shield', 'Platform console')] : null,
       h('a', { onclick: () => { setTheme(dark ? 'light' : 'dark'); renderShell(); } }, icon(dark ? 'sun' : 'moon'), h('span', { class: 'lbl' }, dark ? 'Light mode' : 'Dark mode')),
@@ -67,3 +70,21 @@ export function renderShell() {
 }
 export const refreshNavBadge = () => { const a = document.querySelector('.nav a[data-v=inbox]'); if (!a) return; a.querySelector('.cnt')?.remove(); if (totalUnread()) a.append(h('span', { class: 'cnt' }, totalUnread())); };
 
+
+/** Opens a notification/deep link like "inbox/<ws>/<conv>", "platform/fraud" or "settings/notifications". */
+export async function openLink(link, wsId) {
+  if (!link) return;
+  const [view, a, b] = String(link).replace(/^#/, '').split('/');
+  if (view === 'inbox') {
+    if (+a && +a !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: +a }); await boot(); }
+    S.view = 'inbox'; S.filter = 'open'; S.cur = +b || null; S.site = 0; return renderShell();
+  }
+  if (wsId && wsId !== S.workspace?.id) { await api('/workspaces/switch', 'POST', { id: wsId }).catch(() => {}); await boot(); }
+  if (view === 'platform') { openPlatformTab(a || 'overview'); S.view = 'platform'; }
+  else if (view === 'settings') { openSettingsTab(a || 'widget'); S.view = 'settings'; }
+  else S.view = ['dashboard', 'contacts', 'visitors', 'bot', 'triggers'].includes(view) ? view : 'dashboard';
+  renderShell();
+}
+setNavigator(n => openLink(n.link, n.workspace_id));
+function openPendingLink() { const h0 = location.hash.slice(1); if (h0) { history.replaceState(null, '', location.pathname); openLink(h0); } }
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'open') { const u = new URL(e.data.url); openLink(u.hash.slice(1)); } });

@@ -27,7 +27,7 @@ cp .firebaserc.example .firebaserc   # edit the project id
 # 1. Build & deploy the server to Cloud Run (single instance: realtime state lives in memory)
 gcloud run deploy chatly --source . --region us-central1 --allow-unauthenticated \
   --min-instances 1 --max-instances 1 --no-cpu-throttling --timeout 3600 \
-  --set-env-vars TRUST_PROXY=2,DEMO=0,PLATFORM_ADMINS=you@example.com,ADMIN_EMAIL=you@example.com,ADMIN_PASSWORD='choose-a-strong-one'
+  --set-env-vars TRUST_PROXY=2,DEMO=0,PUBLIC_URL=https://YOUR_PROJECT.web.app,PLATFORM_ADMINS=you@example.com,ADMIN_EMAIL=you@example.com,ADMIN_PASSWORD='choose-a-strong-one'
 # Optional: ANTHROPIC_API_KEY, SMTP_URL, SMTP_FROM (use Secret Manager for real secrets)
 
 # 2. Put it behind your Firebase Hosting domain
@@ -50,3 +50,4 @@ Dashboard: `https://YOUR_PROJECT.web.app/app/` · widget snippet: `<script src="
 - A database created by the older single-workspace version is refused at startup with a clear message; start with a fresh `DB_FILE`.
 - `TRUST_PROXY` must match your setup (2 behind Firebase Hosting → Cloud Run, 1 for Cloud Run directly). Fraud detection, IP blocks and rate limits rely on seeing the real visitor IP.
 - The first account (and anyone in `PLATFORM_ADMINS`) is a platform admin with the Platform console and Fraud & abuse review queue.
+- `PUBLIC_URL` makes links in notification emails and push messages point at your dashboard. Push keys are generated on first start and stored in the database; with ephemeral storage set `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` so browser subscriptions survive redeploys.

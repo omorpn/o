@@ -1,14 +1,17 @@
-import { S, ago, api, appendTo, avEl, can, guard, h, icon, toast } from './core.js';
+import { S, ago, api, appendTo, avEl, can, guard, h, icon, toast, mod } from './core.js';
+import { renderNotificationPrefs } from './notifications.js';
 import { installStatus, siteBar, snippet } from './dashboard.js';
 import { actionPill } from './platform.js';
 import { boot, renderShell } from './shell.js';
 
 // ---------- settings ----------
 export let settingsTab = 'widget';
+export const openSettingsTab = t => { settingsTab = t; };
 export async function renderSettings(main) {
   const page = h('div', { class: 'page' }); main.append(page);
   const TABS = [['widget', 'Widget', 'settings.manage'], ['sites', 'Websites'], ['canned', 'Saved replies'], ['team', 'Team', 'team.manage'], ['roles', 'Roles & permissions', 'roles.manage'],
-    ['spam', 'Spam protection', 'chats.block'], ['audit', 'Audit log', 'audit.view'], ['workspace', 'Workspace'], ['account', 'My account']].filter(t => !t[2] || can(t[2]) || (t[0] === 'widget' && false));
+    ['modules', 'Modules', ['workspace.manage', 'settings.manage']], ['spam', 'Spam protection', 'chats.block', 'spam'], ['notifications', 'Notifications'], ['audit', 'Audit log', 'audit.view'], ['workspace', 'Workspace'], ['account', 'My account']]
+    .filter(t => (!t[2] || [].concat(t[2]).some(can)) && (!t[3] || mod(t[3])));
   if (!TABS.some(t => t[0] === settingsTab)) settingsTab = TABS[0][0];
   appendTo(page, h('h2', {}, 'Settings'), h('div', { class: 'tabs' }, ...TABS.map(([k, l]) => h('button', { class: settingsTab === k ? 'on' : '', onclick: () => { settingsTab = k; renderShell(); } }, l))));
   const admin = can('settings.manage');
@@ -153,6 +156,15 @@ export async function renderSettings(main) {
         h('tbody', {}, ...events.map(e => h('tr', {}, h('td', { style: 'white-space:nowrap' }, ago(e.created) + ' ago'), h('td', {}, actionPill(e.action)), h('td', {}, e.score),
           h('td', { style: 'max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: e.summary }, e.summary), h('td', { class: 'hint' }, e.signals.map(x => x.detail).join('; '))))))
         : h('p', { class: 'hint' }, 'No spam detected yet 🎉')));
+  } else if (settingsTab === 'notifications') {
+    await renderNotificationPrefs(page, { siteBar, canManageSite: can('settings.manage') });
+  } else if (settingsTab === 'modules') {
+    const { modules } = await api('/modules');
+    appendTo(page, h('p', { class: 'hint', style: 'margin:0 0 16px' }, `Turn features on or off for everyone in ${S.workspace.name}. Your plan: `, h('span', { class: 'tag' }, S.workspace.plan)),
+      h('div', { class: 'modgrid' }, ...modules.map(m => h('div', { class: 'card modcard' + (m.enabled ? ' on' : '') },
+        h('div', { class: 'row' }, h('b', { class: 'grow' }, m.name), m.core ? h('span', { class: 'pill' }, 'core') : !m.available ? h('span', { class: 'pill warn' }, 'not in plan')
+          : h('label', { class: 'switch-t' }, h('input', { type: 'checkbox', checked: m.enabled, onchange: guard(async e => { try { const r = await api('/modules/' + m.key, 'PUT', { enabled: e.target.checked }); S.modules = r.modules; toast(`${m.name} ${e.target.checked ? 'on' : 'off'}`); renderShell(); } catch (x) { e.target.checked = !e.target.checked; throw x; } }) }), h('span', {}))),
+        h('p', { class: 'hint', style: 'margin:8px 0 0' }, m.description), !m.available ? h('p', { class: 'hint', style: 'margin:6px 0 0' }, 'Upgrade your plan to use this module.') : null))));
   } else if (settingsTab === 'audit') {
     const { entries } = await api('/audit');
     appendTo(page, h('div', { class: 'card', style: 'padding:0' }, entries.length ? h('table', {}, h('thead', {}, h('tr', {}, ...['When', 'Who', 'Action', 'Details'].map(x => h('th', {}, x)))),

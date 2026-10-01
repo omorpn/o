@@ -55,6 +55,6 @@ export function setEnabled(workspaceId, key, enabled) {
 
 export function modulesFor(workspaceId) {
   const plan = workspaceId ? db.prepare('SELECT plan FROM workspaces WHERE id=?').get(workspaceId)?.plan : null;
-  return allModules().filter(m => !m.hidden).map(m => ({ key: m.key, name: m.name, description: m.description, core: !!m.core,
+  return allModules().filter(m => !m.hidden).sort((a, b) => (b.core ? 1 : 0) - (a.core ? 1 : 0)).map(m => ({ key: m.key, name: m.name, description: m.description, core: !!m.core,
     available: plan ? planAllows(plan, m.key) : true, enabled: isEnabled(workspaceId, m.key) }));
 }
